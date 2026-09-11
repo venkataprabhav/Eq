@@ -26,7 +26,15 @@ export interface NormalizedTrack {
 
 export interface EqState {
   enabled: boolean;
+  auto: boolean;
   profile: EqProfile;
+}
+
+export interface AutoDecision {
+  category: string;
+  presetId: string;
+  reason: string;
+  trackKey: string;
 }
 
 export interface AudioStatus {
@@ -47,7 +55,9 @@ export type RuntimeMessage =
 
 export const STORAGE_KEYS = {
   enabled: "enabled",
+  auto: "auto",
   profile: "profile",
   track: "track",
   audioStatus: "audioStatus",
+  autoDecision: "autoDecision",
 } as const;

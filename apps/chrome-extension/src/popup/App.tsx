@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import { PRESETS, cloneProfile, isPresetId } from "../shared/presets";
 import { scrapePageTrack, trackFromTab } from "../shared/scrape-page-track";
-import { loadAudioStatus, loadEqState, loadTrack, saveEqState } from "../shared/storage";
-import type { AudioStatus, EqBand, EqProfile, FilterType, NormalizedTrack } from "../shared/types";
+import { loadAudioStatus, loadAutoDecision, loadEqState, loadTrack, saveEqState } from "../shared/storage";
+import type { AudioStatus, AutoDecision, EqBand, EqProfile, FilterType, NormalizedTrack } from "../shared/types";
 import { EqGraph } from "./EqGraph";
 
 function formatHz(value: number): string {
@@ -58,9 +58,11 @@ async function refreshNowPlaying(
 
 export function App() {
   const [enabled, setEnabled] = useState(false);
+  const [auto, setAuto] = useState(false);
   const [profile, setProfile] = useState<EqProfile>(cloneProfile(PRESETS[0]));
   const [selectedId, setSelectedId] = useState(PRESETS[0].bands[0].id);
   const [track, setTrack] = useState<NormalizedTrack | null>(null);
+  const [decision, setDecision] = useState<AutoDecision | null>(null);
   const [ready, setReady] = useState(false);
   const [audioStatus, setAudioStatus] = useState<AudioStatus | null>(null);
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
@@ -73,9 +75,13 @@ export function App() {
   useEffect(() => {
     void loadEqState().then((state) => {
       setEnabled(state.enabled);
+      setAuto(state.auto);
       setProfile(state.profile);
       setSelectedId(state.profile.bands[0]?.id ?? "b1");
       setReady(true);
+    });
+    void loadAutoDecision().then((next) => {
+      if (next) setDecision(next);
     });
 
     void refreshNowPlaying(setTrack);
@@ -95,6 +101,15 @@ export function App() {
         const next = changes.track.newValue as NormalizedTrack | null;
         if (next?.title) setTrack(next);
       }
+      if (changes.auto && typeof changes.auto.newValue === "boolean") {
+        setAuto(changes.auto.newValue);
+      }
+      if (changes.profile?.newValue) {
+        setProfile(changes.profile.newValue as EqProfile);
+      }
+      if (changes.autoDecision?.newValue) {
+        setDecision(changes.autoDecision.newValue as AutoDecision);
+      }
       if (changes.audioStatus?.newValue) {
         const next = changes.audioStatus.newValue as AudioStatus;
         setAudioStatus((current) => {
@@ -112,7 +127,7 @@ export function App() {
 
   useEffect(() => {
     if (!ready) return;
-    void saveEqState({ enabled, profile }).then(() => {
+    void saveEqState({ enabled, auto, profile }).then(() => {
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         const tabId = tabs[0]?.id;
         if (!tabId) return;
@@ -121,9 +136,10 @@ export function App() {
         });
       });
     });
-  }, [enabled, profile, ready]);
+  }, [auto, enabled, profile, ready]);
 
   function updateProfile(next: EqProfile) {
+    setAuto(false);
     setProfile({
       ...next,
       id: isPresetId(next.id) ? next.id : "custom",
@@ -132,8 +148,14 @@ export function App() {
   }
 
   function applyPreset(next: EqProfile) {
+    setAuto(false);
     setProfile(cloneProfile(next));
     setSelectedId(next.bands[0].id);
+  }
+
+  function enableAuto() {
+    setAuto(true);
+    setEnabled(true);
   }
 
   function updateBand(patch: Partial<EqBand>) {
@@ -187,6 +209,11 @@ export function App() {
         <span className="meta-source">{track?.source ?? "No tab metadata"}</span>
         <h2>{track?.title ?? "Waiting for playback"}</h2>
         <p>{track ? [track.artist, track.album].filter(Boolean).join(" · ") : "Play audio in this tab to detect a track."}</p>
+        {auto && decision ? (
+          <p className="hint good">
+            Auto · custom — {decision.reason}
+          </p>
+        ) : null}
         <p className={connected ? "hint good" : "hint"}>
           {connected
             ? `EQ connected to ${audioStatus?.attached} media element${audioStatus?.attached === 1 ? "" : "s"}.`
@@ -204,10 +231,23 @@ export function App() {
       />
 
       <div className="presets">
+        <button
+          className={auto ? "chip auto active" : "chip auto"}
+          onClick={enableAuto}
+          type="button"
+        >
+          Auto
+        </button>
         {PRESETS.map((preset) => (
           <button
             key={preset.id}
-            className={activePreset?.id === preset.id ? "chip active" : "chip"}
+            className={
+              !auto && activePreset?.id === preset.id
+                ? "chip active"
+                : auto && profile.id === preset.id
+                  ? "chip suggested"
+                  : "chip"
+            }
             onClick={() => applyPreset(preset)}
             type="button"
           >
@@ -318,10 +358,10 @@ export function App() {
       </section>
 
       <p className="hint">
-        This extension EQs media in the current tab. If a change does nothing
-        later in a video, click the player once — Chrome may have suspended
-        the audio graph. The doubleclick / googlevideo console errors are
-        YouTube, not this extension.
+        Auto asks the local Rust engine at 127.0.0.1:8787 for a custom curve
+        (not a preset). Run <code>cargo run -p universal-eq-api</code> first.
+        Tab audio still uses Web Audio; system-wide EQ stays in the desktop
+        engine later.
       </p>
     </div>
   );

@@ -1,6 +1,6 @@
 import { DEFAULT_PROFILE, cloneProfile } from "./presets";
 import { extensionAlive, isContextInvalidated } from "./runtime";
-import type { AudioStatus, EqProfile, EqState, NormalizedTrack } from "./types";
+import type { AudioStatus, AutoDecision, EqProfile, EqState, NormalizedTrack } from "./types";
 import { STORAGE_KEYS } from "./types";
 
 function isBand(value: unknown): value is EqProfile["bands"][number] {
@@ -30,21 +30,30 @@ function isProfile(value: unknown): value is EqProfile {
 }
 
 export async function loadEqState(): Promise<EqState> {
-  const fallback = { enabled: false, profile: cloneProfile(DEFAULT_PROFILE) };
+  const fallback = {
+    enabled: false,
+    auto: false,
+    profile: cloneProfile(DEFAULT_PROFILE),
+  };
   if (!extensionAlive()) return fallback;
   try {
     const stored = await chrome.storage.local.get([
       STORAGE_KEYS.enabled,
+      STORAGE_KEYS.auto,
       STORAGE_KEYS.profile,
     ]);
     const enabled =
       typeof stored[STORAGE_KEYS.enabled] === "boolean"
         ? stored[STORAGE_KEYS.enabled]
         : false;
+    const auto =
+      typeof stored[STORAGE_KEYS.auto] === "boolean"
+        ? stored[STORAGE_KEYS.auto]
+        : false;
     const profile = isProfile(stored[STORAGE_KEYS.profile])
       ? cloneProfile(stored[STORAGE_KEYS.profile])
       : cloneProfile(DEFAULT_PROFILE);
-    return { enabled, profile };
+    return { enabled, auto, profile };
   } catch (error) {
     if (isContextInvalidated(error)) return fallback;
     throw error;
@@ -56,6 +65,7 @@ export async function saveEqState(state: EqState): Promise<void> {
   try {
     await chrome.storage.local.set({
       [STORAGE_KEYS.enabled]: state.enabled,
+      [STORAGE_KEYS.auto]: state.auto,
       [STORAGE_KEYS.profile]: state.profile,
     });
   } catch (error) {
@@ -100,6 +110,29 @@ export async function loadAudioStatus(): Promise<AudioStatus | null> {
     if (!value || typeof value !== "object") return null;
     const status = value as AudioStatus;
     return typeof status.attached === "number" ? status : null;
+  } catch (error) {
+    if (isContextInvalidated(error)) return null;
+    throw error;
+  }
+}
+
+export async function saveAutoDecision(decision: AutoDecision | null): Promise<void> {
+  if (!extensionAlive()) return;
+  try {
+    await chrome.storage.local.set({ [STORAGE_KEYS.autoDecision]: decision });
+  } catch (error) {
+    if (!isContextInvalidated(error)) throw error;
+  }
+}
+
+export async function loadAutoDecision(): Promise<AutoDecision | null> {
+  if (!extensionAlive()) return null;
+  try {
+    const stored = await chrome.storage.local.get(STORAGE_KEYS.autoDecision);
+    const value = stored[STORAGE_KEYS.autoDecision];
+    if (!value || typeof value !== "object") return null;
+    const decision = value as AutoDecision;
+    return typeof decision.presetId === "string" ? decision : null;
   } catch (error) {
     if (isContextInvalidated(error)) return null;
     throw error;

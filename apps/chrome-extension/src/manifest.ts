@@ -25,7 +25,7 @@ export default defineManifest({
     type: "module",
   },
   permissions: ["storage", "tabs", "scripting"],
-  host_permissions: ["<all_urls>"],
+  host_permissions: ["<all_urls>", "http://127.0.0.1:8787/*", "http://localhost:8787/*"],
   content_scripts: [
     {
       matches: ["<all_urls>"],

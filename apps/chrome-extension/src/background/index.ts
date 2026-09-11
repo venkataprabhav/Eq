@@ -4,9 +4,9 @@ import type { AudioStatus, NormalizedTrack, RuntimeMessage } from "../shared/typ
 let lastTrack: NormalizedTrack | null = null;
 
 async function refreshBadge(): Promise<void> {
-  const { enabled } = await loadEqState();
+  const { enabled, auto } = await loadEqState();
   await chrome.action.setBadgeBackgroundColor({ color: enabled ? "#E8A54B" : "#3A3A3A" });
-  await chrome.action.setBadgeText({ text: enabled ? "ON" : "" });
+  await chrome.action.setBadgeText({ text: enabled ? (auto ? "AUTO" : "ON") : "" });
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -14,7 +14,7 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && (changes.enabled || changes.profile)) {
+  if (area === "local" && (changes.enabled || changes.profile || changes.auto)) {
     void refreshBadge();
   }
 });

@@ -2,6 +2,7 @@ import { extensionAlive } from "../shared/runtime";
 import { loadEqState, saveTrack } from "../shared/storage";
 import type { RuntimeMessage } from "../shared/types";
 import { applyEqToPage, resumeGraphs, watchMedia } from "./audio-graph";
+import { runAutoEq } from "./auto-eq-runner";
 import { readTrack, tracksEqual } from "./metadata";
 
 let lastTrack: ReturnType<typeof readTrack> = null;
@@ -36,6 +37,7 @@ function publishTrack(): void {
   if (tracksEqual(track, lastTrack)) return;
   lastTrack = track;
   void saveTrack(track);
+  void runAutoEq(track);
   chrome.runtime
     .sendMessage({ type: "TRACK_UPDATED", track } satisfies RuntimeMessage)
     .catch(() => {
@@ -49,6 +51,9 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes.enabled || changes.profile) {
     resumeGraphs();
     void syncEq();
+  }
+  if (changes.auto) {
+    void runAutoEq(readTrack());
   }
 });
 
@@ -76,6 +81,7 @@ pollId = window.setInterval(() => {
   resumeGraphs();
   void syncEq();
   publishTrack();
+  void runAutoEq(readTrack());
 }, 1000);
 
 const mediaEvents = [

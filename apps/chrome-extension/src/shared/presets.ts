@@ -45,8 +45,16 @@ function withGains(
   return { id, name, preamp, bands };
 }
 
+export const MUSIC_PROFILE: EqProfile = withGains(
+  "music",
+  "Music",
+  -1.5,
+  [2, 1, 0, 0, 0.5, 1.5, 1, 0.5],
+);
+
 export const PRESETS: EqProfile[] = [
   DEFAULT_PROFILE,
+  MUSIC_PROFILE,
   {
     id: "bass-boost",
     name: "Bass Boost",

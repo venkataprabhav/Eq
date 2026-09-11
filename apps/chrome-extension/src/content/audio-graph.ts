@@ -1,3 +1,4 @@
+import type { SpectrumBands } from "../shared/auto-eq";
 import type { AudioStatus, EqState } from "../shared/types";
 
 interface AttachedGraph {
@@ -7,6 +8,7 @@ interface AttachedGraph {
   preamp: GainNode;
   filters: BiquadFilterNode[];
   limiter: DynamicsCompressorNode;
+  analyser: AnalyserNode;
 }
 
 const attached = new WeakMap<HTMLMediaElement, AttachedGraph>();
@@ -44,6 +46,9 @@ function createGraph(element: HTMLMediaElement): AttachedGraph | null {
     const preamp = context.createGain();
     const filters = Array.from({ length: 8 }, () => context.createBiquadFilter());
     const limiter = context.createDynamicsCompressor();
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.82;
 
     limiter.threshold.value = -1;
     limiter.knee.value = 0;
@@ -51,6 +56,7 @@ function createGraph(element: HTMLMediaElement): AttachedGraph | null {
     limiter.attack.value = 0.003;
     limiter.release.value = 0.12;
 
+    source.connect(analyser);
     let node: AudioNode = source;
     node.connect(preamp);
     node = preamp;
@@ -64,7 +70,7 @@ function createGraph(element: HTMLMediaElement): AttachedGraph | null {
 
     (element as HTMLMediaElement & { __ueqAttached?: boolean }).__ueqAttached =
       true;
-    const graph = { element, context, source, preamp, filters, limiter };
+    const graph = { element, context, source, preamp, filters, limiter, analyser };
     attached.set(element, graph);
     liveGraphs.add(graph);
     void context.resume();
@@ -94,6 +100,46 @@ function applyProfileToGraph(graph: AttachedGraph, state: EqState): void {
   if (graph.context.state === "suspended") {
     void graph.context.resume();
   }
+}
+
+function bandAverage(
+  data: Uint8Array,
+  sampleRate: number,
+  low: number,
+  high: number,
+): number {
+  const binHz = sampleRate / (data.length * 2);
+  let sum = 0;
+  let count = 0;
+  for (let i = 0; i < data.length; i += 1) {
+    const freq = i * binHz;
+    if (freq < low || freq >= high) continue;
+    sum += data[i];
+    count += 1;
+  }
+  return count ? sum / count : 0;
+}
+
+export function sampleSpectrum(): SpectrumBands | null {
+  let chosen: AttachedGraph | null = null;
+  for (const graph of liveGraphs) {
+    if (!graph.element.isConnected) continue;
+    if (!chosen || isActive(graph.element)) chosen = graph;
+    if (isActive(graph.element)) break;
+  }
+  if (!chosen) return null;
+  const data = new Uint8Array(chosen.analyser.frequencyBinCount);
+  chosen.analyser.getByteFrequencyData(data);
+  const rate = chosen.context.sampleRate;
+  return {
+    sub: bandAverage(data, rate, 20, 60),
+    bass: bandAverage(data, rate, 60, 150),
+    lowMid: bandAverage(data, rate, 150, 400),
+    mid: bandAverage(data, rate, 400, 2000),
+    highMid: bandAverage(data, rate, 2000, 6000),
+    high: bandAverage(data, rate, 6000, 16000),
+    rms: bandAverage(data, rate, 20, 16000),
+  };
 }
 
 export function resumeGraphs(): void {

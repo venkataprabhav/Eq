@@ -155,6 +155,15 @@ body,
   color: #1b140b;
 }
 
+.chip.auto {
+  border-color: var(--accent-dim);
+}
+
+.chip.suggested {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .preamp,
 .bands {
   display: grid;
