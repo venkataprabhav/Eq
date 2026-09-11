@@ -1,6 +1,7 @@
 import type { AudioStatus, EqState } from "../shared/types";
 
 interface AttachedGraph {
+  element: HTMLMediaElement;
   context: AudioContext;
   source: MediaElementAudioSourceNode;
   preamp: GainNode;
@@ -9,15 +10,36 @@ interface AttachedGraph {
 }
 
 const attached = new WeakMap<HTMLMediaElement, AttachedGraph>();
+const liveGraphs = new Set<AttachedGraph>();
+
+function keepContextAlive(context: AudioContext): void {
+  const osc = context.createOscillator();
+  const silent = context.createGain();
+  silent.gain.value = 0;
+  osc.frequency.value = 40;
+  osc.connect(silent);
+  silent.connect(context.destination);
+  osc.start();
+  context.addEventListener("statechange", () => {
+    if (context.state === "suspended") {
+      void context.resume();
+    }
+  });
+}
 
 function createGraph(element: HTMLMediaElement): AttachedGraph | null {
-  if (attached.has(element)) return attached.get(element) ?? null;
+  const existing = attached.get(element);
+  if (existing && existing.context.state !== "closed") return existing;
+  if (existing && existing.context.state === "closed") {
+    liveGraphs.delete(existing);
+    attached.delete(element);
+  }
   if ((element as HTMLMediaElement & { __ueqAttached?: boolean }).__ueqAttached) {
     return null;
   }
 
   try {
-    const context = new AudioContext();
+    const context = new AudioContext({ latencyHint: "interactive" });
     const source = context.createMediaElementSource(element);
     const preamp = context.createGain();
     const filters = Array.from({ length: 8 }, () => context.createBiquadFilter());
@@ -38,11 +60,14 @@ function createGraph(element: HTMLMediaElement): AttachedGraph | null {
     }
     node.connect(limiter);
     limiter.connect(context.destination);
+    keepContextAlive(context);
 
     (element as HTMLMediaElement & { __ueqAttached?: boolean }).__ueqAttached =
       true;
-    const graph = { context, source, preamp, filters, limiter };
+    const graph = { element, context, source, preamp, filters, limiter };
     attached.set(element, graph);
+    liveGraphs.add(graph);
+    void context.resume();
     return graph;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -52,22 +77,18 @@ function createGraph(element: HTMLMediaElement): AttachedGraph | null {
 
 function applyProfileToGraph(graph: AttachedGraph, state: EqState): void {
   const { enabled, profile } = state;
-  const now = graph.context.currentTime;
-  const linear = enabled ? 10 ** (profile.preamp / 20) : 1;
-  graph.preamp.gain.cancelScheduledValues(now);
-  graph.preamp.gain.setValueAtTime(linear, now);
+  graph.preamp.gain.value = enabled ? 10 ** (profile.preamp / 20) : 1;
 
   graph.filters.forEach((filter, index) => {
     const band = profile.bands[index];
-    filter.gain.cancelScheduledValues(now);
     if (!band) {
-      filter.gain.setValueAtTime(0, now);
+      filter.gain.value = 0;
       return;
     }
     filter.type = band.type;
-    filter.frequency.setValueAtTime(band.frequency, now);
-    filter.Q.setValueAtTime(Math.max(band.q, 0.01), now);
-    filter.gain.setValueAtTime(enabled ? band.gain : 0, now);
+    filter.frequency.value = band.frequency;
+    filter.Q.value = Math.max(band.q, 0.01);
+    filter.gain.value = enabled ? band.gain : 0;
   });
 
   if (graph.context.state === "suspended") {
@@ -75,9 +96,17 @@ function applyProfileToGraph(graph: AttachedGraph, state: EqState): void {
   }
 }
 
+export function resumeGraphs(): void {
+  for (const graph of liveGraphs) {
+    if (graph.context.state === "suspended") {
+      void graph.context.resume();
+    }
+  }
+}
+
 export function collectMedia(): HTMLMediaElement[] {
   const nodes = document.querySelectorAll(
-    "video.html5-main-video, video.video-stream, .html5-video-player video, audio, video",
+    "video.html5-main-video, video.video-stream, .html5-video-player video, ytd-player video, audio, video",
   );
   const seen = new Set<HTMLMediaElement>();
   const list: HTMLMediaElement[] = [];
@@ -86,7 +115,7 @@ export function collectMedia(): HTMLMediaElement[] {
     seen.add(node);
     list.push(node);
   }
-  return list;
+  return list.sort((a, b) => Number(isActive(b)) - Number(isActive(a)));
 }
 
 function isYouTubeMain(element: HTMLMediaElement): boolean {
@@ -96,15 +125,20 @@ function isYouTubeMain(element: HTMLMediaElement): boolean {
   );
 }
 
+function isActive(element: HTMLMediaElement): boolean {
+  return !element.paused && !element.ended && element.readyState >= 2;
+}
+
 function shouldAttach(element: HTMLMediaElement): boolean {
   if (attached.has(element)) return true;
-  if (!element.paused && !element.ended) return true;
+  if (isActive(element)) return true;
   if (element.currentTime > 0.2) return true;
-  if (isYouTubeMain(element) && navigator.userActivation?.hasBeenActive) return true;
+  if (isYouTubeMain(element)) return true;
   return navigator.userActivation?.hasBeenActive === true;
 }
 
 export function applyEqToPage(state: EqState): AudioStatus {
+  resumeGraphs();
   const media = collectMedia();
   let sampleRate: number | null = null;
   let count = 0;
@@ -126,6 +160,12 @@ export function applyEqToPage(state: EqState): AudioStatus {
     }
   }
 
+  for (const graph of liveGraphs) {
+    if (!graph.element.isConnected || graph.context.state === "closed") {
+      liveGraphs.delete(graph);
+    }
+  }
+
   return { attached: count, mediaFound: media.length, sampleRate, error };
 }
 
@@ -133,7 +173,7 @@ export function watchMedia(onChange: () => void): () => void {
   let timer = 0;
   const observer = new MutationObserver(() => {
     window.clearTimeout(timer);
-    timer = window.setTimeout(onChange, 300);
+    timer = window.setTimeout(onChange, 200);
   });
   observer.observe(document.documentElement, {
     childList: true,

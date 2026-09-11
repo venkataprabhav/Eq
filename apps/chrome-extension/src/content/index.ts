@@ -1,7 +1,7 @@
 import { extensionAlive } from "../shared/runtime";
 import { loadEqState, saveTrack } from "../shared/storage";
 import type { RuntimeMessage } from "../shared/types";
-import { applyEqToPage, watchMedia } from "./audio-graph";
+import { applyEqToPage, resumeGraphs, watchMedia } from "./audio-graph";
 import { readTrack, tracksEqual } from "./metadata";
 
 let lastTrack: ReturnType<typeof readTrack> = null;
@@ -47,6 +47,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (!alive()) return;
   if (area !== "local") return;
   if (changes.enabled || changes.profile) {
+    resumeGraphs();
     void syncEq();
   }
 });
@@ -58,6 +59,7 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, _sender, sendResp
     return false;
   }
   if (message.type === "APPLY_EQ") {
+    resumeGraphs();
     void syncEq().then(() => sendResponse({ ok: true }));
     return true;
   }
@@ -70,15 +72,41 @@ stopWatch = watchMedia(() => {
   void syncEq();
   publishTrack();
 });
-pollId = window.setInterval(publishTrack, 2000);
+pollId = window.setInterval(() => {
+  resumeGraphs();
+  void syncEq();
+  publishTrack();
+}, 1000);
 
-for (const eventName of ["play", "playing", "seeked"]) {
+const mediaEvents = [
+  "play",
+  "playing",
+  "seeked",
+  "loadstart",
+  "loadeddata",
+  "emptied",
+  "durationchange",
+];
+for (const eventName of mediaEvents) {
   document.addEventListener(
     eventName,
     () => {
+      resumeGraphs();
       void syncEq();
       publishTrack();
     },
     true,
   );
 }
+
+for (const eventName of ["yt-navigate-finish", "yt-page-data-updated"]) {
+  document.addEventListener(eventName, () => {
+    window.setTimeout(() => {
+      void syncEq();
+      publishTrack();
+    }, 250);
+  });
+}
+
+document.addEventListener("pointerdown", resumeGraphs, true);
+document.addEventListener("keydown", resumeGraphs, true);
