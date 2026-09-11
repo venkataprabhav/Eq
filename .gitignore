@@ -5,3 +5,5 @@ dist/
 .DS_Store
 Thumbs.db
 apps/chrome-extension/dist/
+target/
+**/*.rs.bk

@@ -1,0 +1,13 @@
+[package]
+name = "dsp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "EQ recommendation and filter helpers for Universal EQ"
+
+[dependencies]
+eq-core = { workspace = true }
+serde = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

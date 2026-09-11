@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/eq-core",
+    "crates/dsp",
+    "services/api",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Universal EQ"]
+
+[workspace.dependencies]
+eq-core = { path = "crates/eq-core" }
+dsp = { path = "crates/dsp" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

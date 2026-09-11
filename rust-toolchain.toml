@@ -1,0 +1,5 @@
+# rust-toolchain.toml forces the GNU target on this Windows setup
+# (MSVC link.exe was unavailable). Prefer MSVC later if Build Tools are installed.
+[toolchain]
+channel = "stable"
+targets = ["x86_64-pc-windows-gnu"]

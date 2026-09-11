@@ -1,0 +1,45 @@
+# Universal EQ API
+
+Local Rust engine that returns a **custom** 8-band EQ curve for the current track.
+
+The Chrome extension Auto mode calls:
+
+`POST http://127.0.0.1:8787/v1/eq/recommend`
+
+within a **500ms** timeout.
+
+## Run
+
+From the repo root (Rust required):
+
+```bash
+cargo run -p universal-eq-api
+```
+
+Or:
+
+```bash
+npm run api
+```
+
+Health check:
+
+```bash
+curl http://127.0.0.1:8787/health
+```
+
+## Recommend example
+
+```bash
+curl -X POST http://127.0.0.1:8787/v1/eq/recommend ^
+  -H "Content-Type: application/json" ^
+  -d "{\"track\":{\"title\":\"Loser\",\"artist\":\"Tame Impala\",\"source\":\"YouTube\"},\"spectrum\":{\"sub\":90,\"bass\":100,\"low_mid\":70,\"mid\":65,\"high_mid\":55,\"high\":45,\"rms\":70}}"
+```
+
+Response includes `profile` (`id: "custom"`), `reason`, `latency_ms`, and `engine`.
+
+## Tests
+
+```bash
+cargo test -p dsp
+```

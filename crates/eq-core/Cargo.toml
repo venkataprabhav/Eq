@@ -1,0 +1,11 @@
+[package]
+name = "eq-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared EQ profile types and recommend request/response models"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
