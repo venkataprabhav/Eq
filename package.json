@@ -1,0 +1,11 @@
+{
+  "name": "universal-eq",
+  "private": true,
+  "engines": {
+    "node": ">=22.18.0 <23"
+  },
+  "scripts": {
+    "dev": "npm run dev --prefix apps/chrome-extension",
+    "build": "npm run build --prefix apps/chrome-extension"
+  }
+}
