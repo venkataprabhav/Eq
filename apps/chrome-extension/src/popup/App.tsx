@@ -192,7 +192,7 @@ export function App() {
             ? `EQ connected to ${audioStatus?.attached} media element${audioStatus?.attached === 1 ? "" : "s"}.`
             : audioStatus?.error
               ? audioStatus.error
-              : "EQ is not in the audio path yet. Play the video, then refresh this tab if sliders still do nothing."}
+              : "EQ is not in the audio path yet. Play the video. If sliders stop working mid-song, click the video once."}
         </p>
       </section>
 
@@ -318,8 +318,10 @@ export function App() {
       </section>
 
       <p className="hint">
-        This extension EQs media in the current tab. System-wide Windows EQ stays
-        in the Rust desktop engine.
+        This extension EQs media in the current tab. If a change does nothing
+        later in a video, click the player once — Chrome may have suspended
+        the audio graph. The doubleclick / googlevideo console errors are
+        YouTube, not this extension.
       </p>
     </div>
   );
