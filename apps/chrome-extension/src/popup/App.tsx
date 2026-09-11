@@ -63,6 +63,7 @@ export function App() {
   const [track, setTrack] = useState<NormalizedTrack | null>(null);
   const [ready, setReady] = useState(false);
   const [audioStatus, setAudioStatus] = useState<AudioStatus | null>(null);
+  const [activeTabId, setActiveTabId] = useState<number | null>(null);
 
   const selected = useMemo(
     () => profile.bands.find((band) => band.id === selectedId) ?? profile.bands[0],
@@ -78,6 +79,9 @@ export function App() {
     });
 
     void refreshNowPlaying(setTrack);
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      setActiveTabId(tabs[0]?.id ?? null);
+    });
     void loadAudioStatus().then((status) => {
       if (status) setAudioStatus(status);
     });
@@ -92,7 +96,14 @@ export function App() {
         if (next?.title) setTrack(next);
       }
       if (changes.audioStatus?.newValue) {
-        setAudioStatus(changes.audioStatus.newValue as AudioStatus);
+        const next = changes.audioStatus.newValue as AudioStatus;
+        setAudioStatus((current) => {
+          if ((next.attached ?? 0) > 0) return next;
+          if ((current?.attached ?? 0) > 0 && current?.pageUrl === next.pageUrl) {
+            return current;
+          }
+          return next;
+        });
       }
     };
     chrome.storage.onChanged.addListener(onStorage);
@@ -136,6 +147,12 @@ export function App() {
     });
   }
 
+  const connected =
+    (audioStatus?.attached ?? 0) > 0 &&
+    (audioStatus?.tabId == null ||
+      activeTabId == null ||
+      audioStatus.tabId === activeTabId);
+
   const activePreset = PRESETS.find(
     (preset) =>
       preset.id === profile.id &&
@@ -170,9 +187,9 @@ export function App() {
         <span className="meta-source">{track?.source ?? "No tab metadata"}</span>
         <h2>{track?.title ?? "Waiting for playback"}</h2>
         <p>{track ? [track.artist, track.album].filter(Boolean).join(" · ") : "Play audio in this tab to detect a track."}</p>
-        <p className={audioStatus?.attached ? "hint good" : "hint"}>
-          {audioStatus?.attached
-            ? `EQ connected to ${audioStatus.attached} media element${audioStatus.attached === 1 ? "" : "s"}.`
+        <p className={connected ? "hint good" : "hint"}>
+          {connected
+            ? `EQ connected to ${audioStatus?.attached} media element${audioStatus?.attached === 1 ? "" : "s"}.`
             : audioStatus?.error
               ? audioStatus.error
               : "EQ is not in the audio path yet. Play the video, then refresh this tab if sliders still do nothing."}

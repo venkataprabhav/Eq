@@ -1,5 +1,5 @@
-import { loadEqState, saveTrack } from "../shared/storage";
-import type { NormalizedTrack, RuntimeMessage } from "../shared/types";
+import { loadAudioStatus, loadEqState, saveAudioStatus, saveTrack } from "../shared/storage";
+import type { AudioStatus, NormalizedTrack, RuntimeMessage } from "../shared/types";
 
 let lastTrack: NormalizedTrack | null = null;
 
@@ -20,7 +20,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 
 chrome.runtime.onMessage.addListener(
-  (message: RuntimeMessage, _sender, sendResponse) => {
+  (message: RuntimeMessage, sender, sendResponse) => {
     if (message.type === "TRACK_UPDATED") {
       lastTrack = message.track;
       void saveTrack(message.track);
@@ -30,8 +30,42 @@ chrome.runtime.onMessage.addListener(
       sendResponse({ type: "TRACK_RESPONSE", track: lastTrack } satisfies RuntimeMessage);
       return false;
     }
+    if (message.type === "AUDIO_STATUS") {
+      void persistAudioStatus(message.status, sender);
+      return false;
+    }
     return false;
   },
 );
+
+function isTopFrame(sender: chrome.runtime.MessageSender): boolean {
+  return sender.frameId === 0 || sender.frameId === undefined;
+}
+
+async function persistAudioStatus(
+  status: AudioStatus,
+  sender: chrome.runtime.MessageSender,
+): Promise<void> {
+  const next: AudioStatus = {
+    ...status,
+    tabId: sender.tab?.id,
+    pageUrl: status.pageUrl ?? sender.tab?.url,
+  };
+  const current = await loadAudioStatus();
+  const sameTab = current?.tabId == null || current.tabId === next.tabId;
+  const samePage = current?.pageUrl === next.pageUrl;
+  const improved = next.attached > (current?.attached ?? 0);
+
+  if (improved || !current) {
+    await saveAudioStatus(next);
+    return;
+  }
+  if (!sameTab || !samePage) {
+    await saveAudioStatus(next);
+    return;
+  }
+  if (next.attached === 0 && !isTopFrame(sender)) return;
+  if (next.attached === 0 && (current.attached ?? 0) > 0) return;
+}
 
 void refreshBadge();

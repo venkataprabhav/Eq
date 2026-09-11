@@ -34,6 +34,8 @@ export interface AudioStatus {
   mediaFound: number;
   sampleRate: number | null;
   error: string | null;
+  tabId?: number;
+  pageUrl?: string;
 }
 
 export type RuntimeMessage =

@@ -1,5 +1,5 @@
 import { extensionAlive } from "../shared/runtime";
-import { loadEqState, saveAudioStatus, saveTrack } from "../shared/storage";
+import { loadEqState, saveTrack } from "../shared/storage";
 import type { RuntimeMessage } from "../shared/types";
 import { applyEqToPage, watchMedia } from "./audio-graph";
 import { readTrack, tracksEqual } from "./metadata";
@@ -20,11 +20,10 @@ async function syncEq(): Promise<void> {
   const state = await loadEqState();
   if (!alive()) return;
   const status = applyEqToPage(state);
-  void saveAudioStatus(status);
   try {
     await chrome.runtime.sendMessage({
       type: "AUDIO_STATUS",
-      status,
+      status: { ...status, pageUrl: location.href },
     } satisfies RuntimeMessage);
   } catch {
     alive();
@@ -71,10 +70,7 @@ stopWatch = watchMedia(() => {
   void syncEq();
   publishTrack();
 });
-pollId = window.setInterval(() => {
-  void syncEq();
-  publishTrack();
-}, 2000);
+pollId = window.setInterval(publishTrack, 2000);
 
 for (const eventName of ["play", "playing", "seeked"]) {
   document.addEventListener(
