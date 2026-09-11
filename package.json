@@ -6,6 +6,9 @@
   },
   "scripts": {
     "dev": "npm run dev --prefix apps/chrome-extension",
-    "build": "npm run build --prefix apps/chrome-extension"
+    "build": "npm run build --prefix apps/chrome-extension",
+    "api": "cargo run -p universal-eq-api",
+    "api:release": "cargo run -p universal-eq-api --release",
+    "test:rust": "cargo test --workspace"
   }
 }
