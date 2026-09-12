@@ -7,36 +7,34 @@ function New-EqIcon([int]$size, [string]$path) {
   $bitmap = New-Object System.Drawing.Bitmap $size, $size
   $g = [System.Drawing.Graphics]::FromImage($bitmap)
   $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-  $g.Clear([System.Drawing.Color]::FromArgb(255, 16, 17, 20))
+  $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+  $g.Clear([System.Drawing.Color]::FromArgb(255, 11, 12, 15))
 
-  $bg = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 24, 26, 31))
-  $accent = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 232, 165, 75))
-  $pen = New-Object System.Drawing.Pen ([System.Drawing.Color]::FromArgb(255, 232, 165, 75), [Math]::Max(1, $size / 16))
+  $tile = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 22, 24, 31))
+  $accent = New-Object System.Drawing.SolidBrush ([System.Drawing.Color]::FromArgb(255, 196, 165, 116))
 
-  $inset = [int]($size * 0.08)
-  $g.FillEllipse($bg, $inset, $inset, $size - 2 * $inset, $size - 2 * $inset)
+  $inset = [int]($size * 0.06)
+  $g.FillEllipse($tile, $inset, $inset, $size - 2 * $inset, $size - 2 * $inset)
 
-  $points = @()
-  $freqs = @(0.12, 0.24, 0.38, 0.5, 0.64, 0.76, 0.88)
-  $gains = @(0.62, 0.38, 0.48, 0.55, 0.42, 0.32, 0.4)
-  for ($i = 0; $i -lt $freqs.Length; $i++) {
-    $x = [int]($size * $freqs[$i])
-    $y = [int]($size * $gains[$i])
-    $points += New-Object System.Drawing.Point ($x, $y)
-  }
-  $g.DrawLines($pen, $points)
+  $heights = @(0.38, 0.62, 0.5, 0.32)
+  $barW = [Math]::Max(2, [int]($size * 0.11))
+  $gap = [int]($size * 0.055)
+  $block = 4 * $barW + 3 * $gap
+  $startX = [int](($size - $block) / 2)
+  $base = [int]($size * 0.78)
 
-  $dot = [Math]::Max(2, [int]($size / 12))
-  foreach ($p in $points) {
-    $g.FillEllipse($accent, $p.X - $dot / 2, $p.Y - $dot / 2, $dot, $dot)
+  for ($i = 0; $i -lt $heights.Length; $i++) {
+    $h = [int]($size * $heights[$i])
+    $x = $startX + $i * ($barW + $gap)
+    $y = $base - $h
+    $g.FillRectangle($accent, $x, $y, $barW, $h)
   }
 
   $bitmap.Save($path, [System.Drawing.Imaging.ImageFormat]::Png)
   $g.Dispose()
   $bitmap.Dispose()
-  $bg.Dispose()
+  $tile.Dispose()
   $accent.Dispose()
-  $pen.Dispose()
 }
 
 New-EqIcon 16 (Join-Path $outDir "icon16.png")
