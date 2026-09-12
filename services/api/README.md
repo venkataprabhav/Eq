@@ -22,7 +22,15 @@ Or:
 npm run api
 ```
 
-It listens on `http://127.0.0.1:8787`. Override with `UNIVERSAL_EQ_PORT`. Leave the process running; Auto in the extension calls it on that address.
+It listens on `http://127.0.0.1:8787` (HTTP only — not `https://`). Override with `UNIVERSAL_EQ_PORT`. Leave the process running; Auto in the extension calls it on that address.
+
+Open [http://127.0.0.1:8787](http://127.0.0.1:8787) in a browser for a short status page, or `/health` for JSON.
+
+On Windows you can install requirements, build the extension, and start this API with one command from the repo root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start.ps1
+```
 
 Health check (PowerShell):
 

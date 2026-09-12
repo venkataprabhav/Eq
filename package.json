@@ -10,6 +10,7 @@
     "api": "cargo run -p universal-eq-api",
     "api:release": "cargo run -p universal-eq-api --release",
     "test:rust": "cargo test --workspace",
-    "progress": "node scripts/update-progress.mjs"
+    "progress": "node scripts/update-progress.mjs",
+    "start": "powershell -ExecutionPolicy Bypass -File ./start.ps1"
   }
 }

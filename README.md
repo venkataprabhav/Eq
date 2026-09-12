@@ -24,12 +24,22 @@ Tick boxes in [PROGRESS.md](PROGRESS.md), then run `npm run progress` or push �
 
 System-wide WASAPI EQ, the Tauri desktop app, and Android / iOS are still later milestones. Desktop, Android, and iOS folders do not exist yet.
 
+## One-command setup (Windows)
+
+From the repo root this installs anything missing (Node 22, Rust, MinGW), builds the Chrome extension, then starts the backend:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start.ps1
+```
+
+Or `npm start`. Leave that window open. The API is **HTTP only** — open [http://127.0.0.1:8787](http://127.0.0.1:8787), not `https://`. If Chrome still shows `ERR_SSL_PROTOCOL_ERROR`, it upgraded the URL; turn off **Settings → Privacy and security → Security → Always use secure connections**.
+
 ## Prerequisites
 
 - Node 22 (`nvm use`) — only needed for the Chrome extension
 - Rust (`cargo --version`) — needed for the backend
 
-If Cargo is missing, install [rustup](https://rustup.rs/) and reopen the terminal.
+If Cargo is missing, install [rustup](https://rustup.rs/) and reopen the terminal. `start.ps1` can install these for you.
 
 ## Run the backend
 

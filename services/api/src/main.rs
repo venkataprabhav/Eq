@@ -27,22 +27,49 @@ async fn main() {
         .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION]);
 
     let app = Router::new()
+        .route("/", get(index))
         .route("/health", get(health))
         .route("/v1/eq/recommend", post(recommend_handler))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    tracing::info!("Universal EQ API listening on http://{addr}");
-    tracing::info!("POST /v1/eq/recommend  GET /health");
-
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .expect("failed to bind API port");
+    tracing::info!("Universal EQ API listening on http://{addr}");
+    tracing::info!("GET /  GET /health  POST /v1/eq/recommend");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("API server failed");
+}
+
+async fn index() -> axum::response::Html<&'static str> {
+    axum::response::Html(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Universal EQ API</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 36rem; margin: 3rem auto; padding: 0 1rem; color: #222; }
+    code { background: #f3f3f3; padding: 0.1rem 0.35rem; }
+    .ok { color: #0a7a32; }
+  </style>
+</head>
+<body>
+  <p class="ok">Backend is running.</p>
+  <h1>Universal EQ API</h1>
+  <p>This server is <strong>HTTP only</strong>. Use <code>http://127.0.0.1:8787</code>, not <code>https://</code>.</p>
+  <p>If Chrome shows <code>ERR_SSL_PROTOCOL_ERROR</code>, it forced HTTPS. Turn off <em>Always use secure connections</em> or keep the <code>http://</code> prefix.</p>
+  <ul>
+    <li><a href="/health">GET /health</a></li>
+    <li>POST /v1/eq/recommend — used by the Chrome extension Auto button</li>
+  </ul>
+</body>
+</html>"#,
+    )
 }
 
 async fn health() -> Json<serde_json::Value> {
