@@ -4,14 +4,15 @@ import { loadEqState, saveAutoDecision, saveEqState } from "../shared/storage";
 import type { AutoDecision, EqProfile, NormalizedTrack } from "../shared/types";
 import { sampleSpectrum } from "./audio-graph";
 
-const neededSamples = 6;
+const minIntervalMs = 800;
+const maxIntervalMs = 1400;
 let samples: SpectrumBands[] = [];
 let lastKey = "";
 let lastApplied = "";
-let pendingFrames = 0;
 let inFlight = false;
 let didEarlyRecommend = false;
-let didSpectrumRecommend = false;
+let lastRecommendAt = 0;
+let lastSpectrumSent: SpectrumBands | null = null;
 
 function averageSpectrum(list: SpectrumBands[]): SpectrumBands {
   const total = list.reduce(
@@ -23,8 +24,22 @@ function averageSpectrum(list: SpectrumBands[]): SpectrumBands {
       highMid: acc.highMid + item.highMid,
       high: acc.high + item.high,
       rms: acc.rms + item.rms,
+      crack: acc.crack + item.crack,
+      hats: acc.hats + item.hats,
+      air: acc.air + item.air,
     }),
-    { sub: 0, bass: 0, lowMid: 0, mid: 0, highMid: 0, high: 0, rms: 0 },
+    {
+      sub: 0,
+      bass: 0,
+      lowMid: 0,
+      mid: 0,
+      highMid: 0,
+      high: 0,
+      rms: 0,
+      crack: 0,
+      hats: 0,
+      air: 0,
+    },
   );
   const n = list.length || 1;
   return {
@@ -35,7 +50,34 @@ function averageSpectrum(list: SpectrumBands[]): SpectrumBands {
     highMid: total.highMid / n,
     high: total.high / n,
     rms: total.rms / n,
+    crack: total.crack / n,
+    hats: total.hats / n,
+    air: total.air / n,
   };
+}
+
+function spectralFlux(a: SpectrumBands | null, b: SpectrumBands | null): number {
+  if (!a || !b) return 999;
+  return (
+    Math.abs(a.sub - b.sub) +
+    Math.abs(a.bass - b.bass) +
+    Math.abs(a.lowMid - b.lowMid) +
+    Math.abs(a.mid - b.mid) +
+    Math.abs(a.highMid - b.highMid) +
+    Math.abs(a.high - b.high) +
+    Math.abs(a.crack - b.crack) +
+    Math.abs(a.hats - b.hats) +
+    Math.abs(a.air - b.air) +
+    Math.abs(a.rms - b.rms) * 0.4
+  );
+}
+
+function resetSession(): void {
+  samples = [];
+  lastApplied = "";
+  didEarlyRecommend = false;
+  lastRecommendAt = 0;
+  lastSpectrumSent = null;
 }
 
 async function applyCustomProfile(
@@ -44,6 +86,7 @@ async function applyCustomProfile(
   reason: string,
   engine: string,
   latencyMs: number,
+  startedEpoch: number,
 ): Promise<void> {
   const key = trackKey(track);
   const fingerprint = `${key}::${profile.preamp}::${profile.bands
@@ -53,17 +96,19 @@ async function applyCustomProfile(
 
   const state = await loadEqState();
   if (!state.auto) return;
+  if (state.epoch !== startedEpoch) return;
 
   lastApplied = fingerprint;
   await saveEqState({
     enabled: true,
-    auto: true,
+    auto: state.auto,
     profile: {
       ...profile,
       id: "custom",
       name: "Custom Auto",
       bands: profile.bands.map((band) => ({ ...band })),
     },
+    epoch: state.epoch,
   });
 
   const decision: AutoDecision = {
@@ -78,6 +123,7 @@ async function applyCustomProfile(
 async function requestRecommend(
   track: NormalizedTrack | null,
   spectrum: SpectrumBands | null,
+  startedEpoch: number,
 ): Promise<void> {
   if (inFlight) return;
   inFlight = true;
@@ -89,6 +135,7 @@ async function requestRecommend(
       result.reason,
       result.engine,
       result.latency_ms,
+      startedEpoch,
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -106,39 +153,38 @@ async function requestRecommend(
 export async function runAutoEq(track: NormalizedTrack | null): Promise<void> {
   const state = await loadEqState();
   if (!state.auto) {
-    samples = [];
+    resetSession();
     return;
   }
 
   const key = trackKey(track);
   if (key !== lastKey) {
     lastKey = key;
-    samples = [];
-    pendingFrames = 0;
-    lastApplied = "";
-    didEarlyRecommend = false;
-    didSpectrumRecommend = false;
+    resetSession();
   }
 
   const snapshot = sampleSpectrum();
-  if (snapshot && snapshot.rms >= 10) {
+  if (snapshot && snapshot.rms >= 8) {
     samples.push(snapshot);
-    if (samples.length > 16) samples.shift();
-    pendingFrames += 1;
+    if (samples.length > 10) samples.shift();
   }
 
+  const now = Date.now();
   if (!didEarlyRecommend && key) {
     didEarlyRecommend = true;
-    await requestRecommend(track, null);
+    lastRecommendAt = now;
+    await requestRecommend(track, null, state.epoch);
     return;
   }
 
-  if (
-    !didSpectrumRecommend &&
-    pendingFrames >= neededSamples &&
-    samples.length >= 4
-  ) {
-    didSpectrumRecommend = true;
-    await requestRecommend(track, averageSpectrum(samples));
-  }
+  if (samples.length < 3 || inFlight) return;
+
+  const avg = averageSpectrum(samples);
+  const moved = spectralFlux(avg, lastSpectrumSent);
+  const interval = moved > 42 ? minIntervalMs : maxIntervalMs;
+  if (now - lastRecommendAt < interval) return;
+
+  lastSpectrumSent = avg;
+  lastRecommendAt = now;
+  await requestRecommend(track, avg, state.epoch);
 }

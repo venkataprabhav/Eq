@@ -28,6 +28,8 @@ export interface EqState {
   enabled: boolean;
   auto: boolean;
   profile: EqProfile;
+  /** Bumps on every manual edit so in-flight Auto results cannot overwrite. */
+  epoch: number;
 }
 
 export interface AutoDecision {
@@ -60,4 +62,5 @@ export const STORAGE_KEYS = {
   track: "track",
   audioStatus: "audioStatus",
   autoDecision: "autoDecision",
+  epoch: "epoch",
 } as const;

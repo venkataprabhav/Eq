@@ -1,7 +1,14 @@
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { PRESETS, cloneProfile, isPresetId } from "../shared/presets";
 import { scrapePageTrack, trackFromTab } from "../shared/scrape-page-track";
-import { loadAudioStatus, loadAutoDecision, loadEqState, loadTrack, saveEqState } from "../shared/storage";
+import {
+  loadAudioStatus,
+  loadAutoDecision,
+  loadEqState,
+  loadTrack,
+  saveEqState,
+  writeSessionLock,
+} from "../shared/storage";
 import type { AudioStatus, AutoDecision, EqBand, EqProfile, FilterType, NormalizedTrack } from "../shared/types";
 import { EqGraph } from "./EqGraph";
 
@@ -59,7 +66,9 @@ async function refreshNowPlaying(
 export function App() {
   const [enabled, setEnabled] = useState(false);
   const [auto, setAuto] = useState(false);
+  const [epoch, setEpoch] = useState(0);
   const [profile, setProfile] = useState<EqProfile>(cloneProfile(PRESETS[0]));
+  const autoRef = useRef(false);
   const [selectedId, setSelectedId] = useState(PRESETS[0].bands[0].id);
   const [track, setTrack] = useState<NormalizedTrack | null>(null);
   const [decision, setDecision] = useState<AutoDecision | null>(null);
@@ -76,6 +85,8 @@ export function App() {
     void loadEqState().then((state) => {
       setEnabled(state.enabled);
       setAuto(state.auto);
+      autoRef.current = state.auto;
+      setEpoch(state.epoch);
       setProfile(state.profile);
       setSelectedId(state.profile.bands[0]?.id ?? "b1");
       setReady(true);
@@ -102,10 +113,20 @@ export function App() {
         if (next?.title) setTrack(next);
       }
       if (changes.auto && typeof changes.auto.newValue === "boolean") {
+        autoRef.current = changes.auto.newValue;
         setAuto(changes.auto.newValue);
       }
+      if (typeof changes.epoch?.newValue === "number") {
+        setEpoch(changes.epoch.newValue);
+      }
       if (changes.profile?.newValue) {
-        setProfile(changes.profile.newValue as EqProfile);
+        const following =
+          typeof changes.auto?.newValue === "boolean"
+            ? changes.auto.newValue
+            : autoRef.current;
+        if (following) {
+          setProfile(changes.profile.newValue as EqProfile);
+        }
       }
       if (changes.autoDecision?.newValue) {
         setDecision(changes.autoDecision.newValue as AutoDecision);
@@ -127,7 +148,7 @@ export function App() {
 
   useEffect(() => {
     if (!ready) return;
-    void saveEqState({ enabled, auto, profile }).then(() => {
+    void saveEqState({ enabled, auto, profile, epoch }).then(() => {
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         const tabId = tabs[0]?.id;
         if (!tabId) return;
@@ -136,10 +157,24 @@ export function App() {
         });
       });
     });
-  }, [auto, enabled, profile, ready]);
+  }, [auto, enabled, epoch, profile, ready]);
+
+  function bumpEpoch(nextAuto: boolean): void {
+    if (!nextAuto && !autoRef.current) {
+      setAuto(false);
+      return;
+    }
+    autoRef.current = nextAuto;
+    setAuto(nextAuto);
+    setEpoch((current) => {
+      const next = current + 1;
+      void writeSessionLock(nextAuto, next);
+      return next;
+    });
+  }
 
   function updateProfile(next: EqProfile) {
-    setAuto(false);
+    bumpEpoch(false);
     setProfile({
       ...next,
       id: isPresetId(next.id) ? next.id : "custom",
@@ -148,13 +183,13 @@ export function App() {
   }
 
   function applyPreset(next: EqProfile) {
-    setAuto(false);
+    bumpEpoch(false);
     setProfile(cloneProfile(next));
     setSelectedId(next.bands[0].id);
   }
 
   function enableAuto() {
-    setAuto(true);
+    bumpEpoch(true);
     setEnabled(true);
   }
 
@@ -211,7 +246,7 @@ export function App() {
         <p>{track ? [track.artist, track.album].filter(Boolean).join(" · ") : "Play audio in this tab to detect a track."}</p>
         {auto && decision ? (
           <p className="hint good">
-            Auto · custom — {decision.reason}
+            Auto follows the song — {decision.reason}
           </p>
         ) : null}
         <p className={connected ? "hint good" : "hint"}>
@@ -358,10 +393,10 @@ export function App() {
       </section>
 
       <p className="hint">
-        Auto asks the local Rust engine at 127.0.0.1:8787 for a custom curve
-        (not a preset). Run <code>cargo run -p universal-eq-api</code> first.
-        Tab audio still uses Web Audio; system-wide EQ stays in the desktop
-        engine later.
+        Auto keeps listening and retunes for verse/chorus/quiet parts. Drag any
+        slider or pick a preset to lock a manual curve — Auto will not overwrite
+        it. Rust engine: <code>cargo run -p universal-eq-api</code> on
+        127.0.0.1:8787.
       </p>
     </div>
   );

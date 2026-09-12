@@ -17,6 +17,9 @@ export interface SpectrumBands {
   highMid: number;
   high: number;
   rms: number;
+  crack: number;
+  hats: number;
+  air: number;
 }
 
 const CATEGORY_PRESETS: Record<AutoCategory, string> = {

@@ -43,6 +43,9 @@ export async function recommendFromRust(
               high_mid: spectrum.highMid,
               high: spectrum.high,
               rms: spectrum.rms,
+              crack: spectrum.crack,
+              hats: spectrum.hats,
+              air: spectrum.air,
             }
           : null,
       }),

@@ -82,19 +82,26 @@ function createGraph(element: HTMLMediaElement): AttachedGraph | null {
 }
 
 function applyProfileToGraph(graph: AttachedGraph, state: EqState): void {
-  const { enabled, profile } = state;
-  graph.preamp.gain.value = enabled ? 10 ** (profile.preamp / 20) : 1;
+  const { enabled, profile, auto } = state;
+  const now = graph.context.currentTime;
+  const tau = auto ? 0.12 : 0.015;
+  const preamp = enabled ? 10 ** (profile.preamp / 20) : 1;
+
+  graph.preamp.gain.cancelScheduledValues(now);
+  graph.preamp.gain.setTargetAtTime(preamp, now, tau);
 
   graph.filters.forEach((filter, index) => {
     const band = profile.bands[index];
     if (!band) {
-      filter.gain.value = 0;
+      filter.gain.cancelScheduledValues(now);
+      filter.gain.setTargetAtTime(0, now, tau);
       return;
     }
     filter.type = band.type;
     filter.frequency.value = band.frequency;
     filter.Q.value = Math.max(band.q, 0.01);
-    filter.gain.value = enabled ? band.gain : 0;
+    filter.gain.cancelScheduledValues(now);
+    filter.gain.setTargetAtTime(enabled ? band.gain : 0, now, tau);
   });
 
   if (graph.context.state === "suspended") {
@@ -139,6 +146,9 @@ export function sampleSpectrum(): SpectrumBands | null {
     highMid: bandAverage(data, rate, 2000, 6000),
     high: bandAverage(data, rate, 6000, 16000),
     rms: bandAverage(data, rate, 20, 16000),
+    crack: bandAverage(data, rate, 2500, 5000),
+    hats: bandAverage(data, rate, 6000, 10000),
+    air: bandAverage(data, rate, 10000, 16000),
   };
 }
 
@@ -175,12 +185,22 @@ function isActive(element: HTMLMediaElement): boolean {
   return !element.paused && !element.ended && element.readyState >= 2;
 }
 
+function isAudible(element: HTMLMediaElement): boolean {
+  return isActive(element) && !element.muted && element.volume > 0;
+}
+
 function shouldAttach(element: HTMLMediaElement): boolean {
   if (attached.has(element)) return true;
-  if (isActive(element)) return true;
-  if (element.currentTime > 0.2) return true;
-  if (isYouTubeMain(element)) return true;
-  return navigator.userActivation?.hasBeenActive === true;
+  if (element.muted) return false;
+  if (isAudible(element)) return true;
+  if (
+    isYouTubeMain(element) &&
+    !element.paused &&
+    navigator.userActivation?.hasBeenActive === true
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export function applyEqToPage(state: EqState): AudioStatus {

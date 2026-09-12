@@ -34,6 +34,7 @@ export async function loadEqState(): Promise<EqState> {
     enabled: false,
     auto: false,
     profile: cloneProfile(DEFAULT_PROFILE),
+    epoch: 0,
   };
   if (!extensionAlive()) return fallback;
   try {
@@ -41,6 +42,7 @@ export async function loadEqState(): Promise<EqState> {
       STORAGE_KEYS.enabled,
       STORAGE_KEYS.auto,
       STORAGE_KEYS.profile,
+      STORAGE_KEYS.epoch,
     ]);
     const enabled =
       typeof stored[STORAGE_KEYS.enabled] === "boolean"
@@ -53,7 +55,9 @@ export async function loadEqState(): Promise<EqState> {
     const profile = isProfile(stored[STORAGE_KEYS.profile])
       ? cloneProfile(stored[STORAGE_KEYS.profile])
       : cloneProfile(DEFAULT_PROFILE);
-    return { enabled, auto, profile };
+    const epoch =
+      typeof stored[STORAGE_KEYS.epoch] === "number" ? stored[STORAGE_KEYS.epoch] : 0;
+    return { enabled, auto, profile, epoch };
   } catch (error) {
     if (isContextInvalidated(error)) return fallback;
     throw error;
@@ -63,10 +67,28 @@ export async function loadEqState(): Promise<EqState> {
 export async function saveEqState(state: EqState): Promise<void> {
   if (!extensionAlive()) return;
   try {
+    const current = await loadEqState();
+    const epoch = Math.max(state.epoch, current.epoch);
+    const stale = epoch > state.epoch;
     await chrome.storage.local.set({
-      [STORAGE_KEYS.enabled]: state.enabled,
-      [STORAGE_KEYS.auto]: state.auto,
-      [STORAGE_KEYS.profile]: state.profile,
+      [STORAGE_KEYS.enabled]: stale ? current.enabled : state.enabled,
+      [STORAGE_KEYS.auto]: stale ? current.auto : state.auto,
+      [STORAGE_KEYS.profile]: stale ? current.profile : state.profile,
+      [STORAGE_KEYS.epoch]: epoch,
+    });
+  } catch (error) {
+    if (!isContextInvalidated(error)) throw error;
+  }
+}
+
+/** Write Auto + epoch immediately so in-flight Rust applies cannot win. */
+export async function writeSessionLock(auto: boolean, epoch: number): Promise<void> {
+  if (!extensionAlive()) return;
+  try {
+    await chrome.storage.local.set({
+      ...(auto ? { [STORAGE_KEYS.enabled]: true } : {}),
+      [STORAGE_KEYS.auto]: auto,
+      [STORAGE_KEYS.epoch]: epoch,
     });
   } catch (error) {
     if (!isContextInvalidated(error)) throw error;

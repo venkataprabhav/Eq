@@ -82,7 +82,7 @@ pollId = window.setInterval(() => {
   void syncEq();
   publishTrack();
   void runAutoEq(readTrack());
-}, 1000);
+}, 400);
 
 const mediaEvents = [
   "play",
