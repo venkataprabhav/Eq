@@ -32,7 +32,7 @@ npm run build
 
 Load `apps/chrome-extension/dist` as an unpacked extension in `chrome://extensions`.
 
-With the API running, open YouTube, enable EQ, click **Auto**. The popup should show a custom curve from `universal-eq-rust/0.1`.
+With the API running, open YouTube, enable EQ, click **Auto**. The popup should show a custom curve from `universal-eq-rust/0.2` that follows louder/quieter sections of the song. Moving a slider turns Auto off immediately.
 
 ## Workspace layout
 
