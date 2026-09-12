@@ -10,7 +10,7 @@ use eq_core::{
     TrackInfo, BAND_COUNT, DEFAULT_FREQUENCIES,
 };
 
-const ENGINE: &str = "universal-eq-rust/0.7";
+const ENGINE: &str = "universal-eq-rust/1.2";
 
 /// 40, 63, 100, 160, 250, 400, 630, 1k, 1.6k, 2.5k, 4k, 6.3k, 10k, 12.5k, 16k
 const I_SUB: usize = 0;
@@ -30,10 +30,10 @@ const I_SHEEN: usize = 13;
 const I_TOP: usize = 14;
 
 const MAX_BOOST: [f32; BAND_COUNT] = [
-    2.2, 2.4, 2.0, 1.6, 1.4, 1.2, 2.4, 3.4, 3.2, 2.8, 1.8, 1.2, 0.8, 0.4, 0.3,
+    2.2, 2.4, 2.0, 1.6, 1.4, 1.2, 2.4, 3.4, 3.2, 3.0, 2.6, 2.8, 2.6, 2.2, 1.4,
 ];
 const MAX_CUT: [f32; BAND_COUNT] = [
-    2.0, 2.2, 1.8, 1.4, 1.2, 1.6, 1.0, 0.8, 0.8, 1.0, 1.6, 2.2, 2.4, 2.6, 2.8,
+    2.0, 2.2, 1.8, 1.6, 1.6, 2.0, 1.0, 0.8, 0.8, 1.0, 1.4, 2.2, 2.4, 2.6, 2.8,
 ];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -66,14 +66,13 @@ pub fn recommend(request: &RecommendRequest) -> RecommendResponse {
 
     let mut gains = enhance(lead, mix.as_ref(), &meta, section);
     apply_device_offsets(&mut gains, request.target_offsets_db.as_ref());
-    if meta.no_air_boost || mix.as_ref().is_some_and(|m| m.dark_air > 0.35) {
-        for i in I_AIR..=I_TOP {
+    // Only flatten true air on explicit night/lofi listening — YouTube
+    // always looks "dark" at 12 kHz and must not mute snare / vocal air.
+    if meta.no_air_boost {
+        for i in I_SHEEN..=I_TOP {
             if gains[i] > 0.0 {
-                gains[i] = 0.0;
+                gains[i] *= 0.35;
             }
-        }
-        if gains[I_HATS] > 0.5 {
-            gains[I_HATS] = 0.5;
         }
     }
     clamp_gains(&mut gains);
@@ -169,7 +168,16 @@ fn metadata_hints(track: Option<&TrackInfo>) -> MetaHints {
 
     if contains_any(
         &text,
-        &["lofi", "lo-fi", "chillhop", "sleep", "rain", "ambient", "night"],
+        &[
+            "lofi",
+            "lo-fi",
+            "chillhop",
+            "sleep mix",
+            "rain sounds",
+            "ambient mix",
+            "night lofi",
+            "lofi night",
+        ],
     ) {
         hints.night = true;
         hints.no_air_boost = true;
@@ -239,14 +247,21 @@ fn pick_lead(meta: &MetaHints, mix: Option<&MixFeatures>) -> Lead {
     }
     let vocal = mix.map(|m| m.vocal).unwrap_or(0.0);
     let boom = mix.map(|m| m.boom).unwrap_or(0.0);
-    // Featured singers and mid-forward mixes win over "there's also bass".
-    if meta.vocal || vocal > 0.34 {
+    // A singer over a beat is still a vocal record. Bass-lead is only for
+    // tagged 808/EDM or a true instrumental pocket with almost no mids.
+    if meta.vocal {
         return Lead::Vocal;
     }
-    if meta.bass_heavy || boom > 0.42 {
+    if (meta.bass_heavy && vocal < 0.32) || (boom > 0.75 && vocal < 0.16) {
         return Lead::Bass;
     }
-    Lead::Groove
+    if vocal > 0.18 {
+        return Lead::Vocal;
+    }
+    if vocal < 0.10 && boom < 0.35 {
+        return Lead::Groove;
+    }
+    Lead::Vocal
 }
 
 /// Build an enhancement curve. No inverse-EQ / flatten-to-target.
@@ -264,10 +279,15 @@ fn enhance(
     };
 
     if let Some(mix) = mix {
+        open_snare(&mut gains, mix, lead);
         tame_harshness(&mut gains, mix);
-        if mix.mud > 0.35 && lead != Lead::Speech {
-            gains[I_MUD] -= 0.7 * mix.mud;
-            gains[I_WARM] -= 0.25 * mix.mud;
+        if mix.dark_air > 0.4 {
+            // YouTube often has no 16 kHz; do not invent hiss there.
+            gains[I_TOP] = gains[I_TOP].min(0.35);
+        }
+        if mix.mud > 0.22 && lead != Lead::Speech {
+            gains[I_MUD] -= 1.1 * mix.mud;
+            gains[I_WARM] -= 0.65 * mix.mud;
         }
     }
 
@@ -306,64 +326,67 @@ fn vocal_curve(mix: Option<&MixFeatures>, meta: &MetaHints, section: &str) -> [f
     let v = if meta.vocal { measured.max(0.72) } else { measured };
     let boom = mix.map(|m| m.boom).unwrap_or(0.0);
     let grit = mix.map(|m| m.grit).unwrap_or(0.0);
-    let hats = mix.map(|m| m.hats).unwrap_or(0.0);
     let snare = mix.map(|m| m.snare).unwrap_or(0.0);
     let sung = mix.map(|m| m.vocal).unwrap_or(0.0);
 
-    // If the vocal is already saturated in 1–2 kHz, keep the lift but lean
-    // into body (630) instead of piling more grit.
-    let presence = 1.0 - 0.28 * grit;
-    let air = (1.0 - 0.50 * hats) * (1.0 - 0.28 * snare);
+    // Match a hand-tuned vocal: peak 2.5–4 kHz, keep 6–13 kHz open.
+    // 1 kHz is body, not the lead — too much sounds nasal/muffled.
+    let presence = 1.0 - 0.12 * grit;
 
     let mut gains = [0.0_f32; BAND_COUNT];
-    gains[I_SUB] = -0.9 * v - 0.35 * boom * v;
-    gains[I_KICK] = -1.1 * v - 0.45 * boom * v;
-    gains[I_BASS] = -0.55 * v;
-    gains[I_BODY] = -0.2 * v;
-    gains[I_WARM] = 0.05 * v;
-    gains[I_MUD] = -0.15 * v;
-    gains[I_NASAL] = 1.45 * v + 0.35 * grit;
-    gains[I_WORDS] = 2.9 * v * presence;
-    gains[I_PRES] = 2.5 * v * presence;
-    gains[I_INTEL] = 2.1 * v * presence;
-    gains[I_ATTACK] = 0.75 * v * air;
-    gains[I_HATS] = 0.1 * v * air;
-    gains[I_AIR] = -0.45 * v;
-    gains[I_SHEEN] = -0.25 * v;
-    gains[I_TOP] = 0.0;
+    gains[I_SUB] = -0.6 * v - 0.25 * boom * v;
+    gains[I_KICK] = -0.7 * v - 0.3 * boom * v;
+    gains[I_BASS] = -0.35 * v;
+    gains[I_BODY] = -0.15 * v;
+    gains[I_WARM] = -0.25 * v;
+    gains[I_MUD] = -0.45 * v;
+    gains[I_NASAL] = 0.35 * v;
+    gains[I_WORDS] = 0.9 * v * presence;
+    gains[I_PRES] = 2.2 * v * presence;
+    gains[I_INTEL] = 2.7 * v * presence;
+    gains[I_ATTACK] = 2.3 * v + 0.7 * snare;
+    gains[I_HATS] = 1.9 * v + 0.5 * snare;
+    gains[I_AIR] = 1.8 * v + 0.25 * snare;
+    gains[I_SHEEN] = 1.5 * v;
+    gains[I_TOP] = 0.65 * v;
 
     match section {
         "verse" => {
-            gains[I_NASAL] += 0.2;
-            gains[I_WORDS] += 0.4;
-            gains[I_PRES] += 0.5;
-            gains[I_INTEL] += 0.35;
+            gains[I_PRES] += 0.45;
+            gains[I_INTEL] += 0.55;
+            gains[I_ATTACK] += 0.4;
+            gains[I_HATS] += 0.25;
             gains[I_KICK] -= 0.15;
         }
         "chorus" => {
-            // Keep the drop. Vocal stays forward; do not scoop the production.
-            gains[I_SUB] += 0.4 * v;
-            gains[I_KICK] += 0.45 * v;
-            gains[I_BASS] += 0.2 * v;
-            gains[I_WORDS] += 0.15;
+            gains[I_SUB] += 0.2 * v;
+            gains[I_KICK] += 0.15 * v;
             gains[I_PRES] += 0.25;
+            gains[I_INTEL] += 0.4;
+            gains[I_ATTACK] += 0.45;
+            gains[I_HATS] += 0.3;
+            gains[I_AIR] += 0.25;
         }
         "quiet" => {
-            gains[I_WORDS] += 0.5;
-            gains[I_PRES] += 0.45;
-            gains[I_INTEL] += 0.3;
+            gains[I_PRES] += 0.4;
+            gains[I_INTEL] += 0.45;
+            gains[I_ATTACK] += 0.25;
+            gains[I_AIR] += 0.2;
             gains[I_KICK] -= 0.15;
         }
         "groove" => {
-            // Bass-heavy beat under a singer is still a vocal mix.
-            // Only back off words in a true instrumental pocket.
             if sung < 0.22 && !meta.vocal {
-                gains[I_KICK] += 0.5 * v;
-                gains[I_WORDS] -= 0.2;
-                gains[I_PRES] -= 0.15;
+                gains[I_KICK] += 0.3 * v;
+                gains[I_INTEL] += 0.3;
+                gains[I_ATTACK] += 0.5;
+                gains[I_HATS] += 0.35;
             } else {
-                gains[I_SUB] += 0.35 * v;
-                gains[I_KICK] += 0.35 * v;
+                gains[I_PRES] += 0.3;
+                gains[I_INTEL] += 0.5;
+                gains[I_ATTACK] += 0.55;
+                gains[I_HATS] += 0.5;
+                gains[I_AIR] += 0.45;
+                gains[I_SHEEN] += 0.35;
             }
         }
         _ => {}
@@ -381,42 +404,61 @@ fn bass_curve(mix: Option<&MixFeatures>) -> [f32; BAND_COUNT] {
     gains[I_BODY] = 0.7 * boom;
     gains[I_WARM] = 0.15;
     gains[I_WORDS] = 0.3;
-    gains[I_PRES] = 0.45;
-    gains[I_INTEL] = 0.85;
-    gains[I_ATTACK] = 0.35;
-    gains[I_AIR] = -0.15;
+    gains[I_PRES] = 0.55;
+    gains[I_INTEL] = 1.1;
+    gains[I_ATTACK] = 0.9;
+    gains[I_HATS] = 0.85;
+    gains[I_AIR] = 0.9;
+    gains[I_SHEEN] = 0.7;
     gains
 }
 
 fn groove_curve(mix: Option<&MixFeatures>) -> [f32; BAND_COUNT] {
     let boom = mix.map(|m| m.boom).unwrap_or(0.25);
+    let snare = mix.map(|m| m.snare).unwrap_or(0.25);
     let mut gains = [0.0_f32; BAND_COUNT];
     gains[I_SUB] = 1.1 + 0.4 * boom;
     gains[I_KICK] = 1.4 + 0.3 * boom;
     gains[I_BASS] = 0.85;
     gains[I_BODY] = 0.4;
+    gains[I_MUD] = -0.35;
     gains[I_NASAL] = 0.35;
     gains[I_WORDS] = 0.6;
-    gains[I_PRES] = 0.85;
-    gains[I_INTEL] = 1.3;
-    gains[I_ATTACK] = 0.8;
-    gains[I_HATS] = 0.4;
-    gains[I_AIR] = 0.15;
+    gains[I_PRES] = 0.95;
+    gains[I_INTEL] = 1.5 + 0.4 * snare;
+    gains[I_ATTACK] = 1.2 + 0.7 * snare;
+    gains[I_HATS] = 1.35 + 0.45 * snare;
+    gains[I_AIR] = 1.55;
+    gains[I_SHEEN] = 1.2;
     gains
 }
 
-fn tame_harshness(gains: &mut [f32; BAND_COUNT], mix: &MixFeatures) {
-    if mix.hats > 0.45 {
-        gains[I_AIR] -= 1.3 * mix.hats;
-        gains[I_SHEEN] -= 1.1 * mix.hats;
-        gains[I_TOP] -= 0.8 * mix.hats;
-        if mix.hats > 0.7 {
-            gains[I_HATS] -= 0.55 * (mix.hats - 0.7);
-        }
+/// Bring back snare crack on dense / YouTube-dark mixes without making hats hiss.
+fn open_snare(gains: &mut [f32; BAND_COUNT], mix: &MixFeatures, lead: Lead) {
+    if mix.snare > 0.78 && mix.crushed > 0.55 {
+        return;
     }
-    if mix.snare > 0.75 && mix.crushed > 0.45 {
-        // Only when the crack is actually painful — do not suppress a healthy snare.
-        gains[I_ATTACK] -= 0.55 * (mix.snare - 0.75);
+    let need = if mix.snare < 0.55 {
+        0.55 + (0.55 - mix.snare)
+    } else {
+        0.35
+    };
+    let scale = if lead == Lead::Speech { 0.45 } else { 1.0 };
+    gains[I_INTEL] += 0.55 * need * scale;
+    gains[I_ATTACK] += 0.95 * need * scale;
+    gains[I_HATS] += 0.55 * need * scale;
+    gains[I_AIR] += 0.4 * need * scale;
+}
+
+fn tame_harshness(gains: &mut [f32; BAND_COUNT], mix: &MixFeatures) {
+    // Only shave 16 kHz hiss. 6.3 / 10 / 12.5 kHz carry snare and air.
+    if mix.hats > 0.7 {
+        gains[I_TOP] -= 0.7 * (mix.hats - 0.7);
+        gains[I_SHEEN] -= 0.25 * (mix.hats - 0.7);
+    }
+    if mix.snare > 0.82 && mix.crushed > 0.55 {
+        // Only when the crack is actually painful — do not bury a healthy snare.
+        gains[I_ATTACK] -= 0.35 * (mix.snare - 0.82);
     }
 }
 
@@ -565,7 +607,7 @@ mod tests {
     fn heavy_low_end_without_vocal_enhances_bass() {
         let response = recommend(&RecommendRequest {
             track: Some(TrackInfo {
-                title: "Test Song".into(),
+                title: "Phonk 808".into(),
                 artist: "Artist".into(),
                 ..Default::default()
             }),
@@ -592,7 +634,7 @@ mod tests {
             "bass-led mix should get a low-end lift, got {}",
             response.profile.bands[0].gain
         );
-        assert!(response.profile.bands[I_AIR].gain < 1.0);
+        assert!(response.profile.bands[I_AIR].gain >= 0.0);
         assert!(response.reason.contains("low end"));
     }
 
@@ -641,9 +683,10 @@ mod tests {
         });
 
         // Dense mix still has a vocal/mid lead — enhance it, do not scoop it.
-        assert!(response.profile.bands[I_WORDS].gain > 0.8);
-        assert!(response.profile.bands[I_PRES].gain > 0.4);
-        assert!(response.profile.bands[I_AIR].gain <= 0.2);
+        assert!(response.profile.bands[I_INTEL].gain > 1.2);
+        assert!(response.profile.bands[I_PRES].gain > 0.8);
+        assert!(response.profile.bands[I_HATS].gain > 0.6);
+        assert!(response.profile.bands[I_AIR].gain > 0.4);
         assert!(response.profile.preamp < 0.0);
     }
 
@@ -672,12 +715,14 @@ mod tests {
 
         assert!(response.reason.contains("vocal"));
         assert!(
-            response.profile.bands[I_WORDS].gain > 1.6,
-            "1 kHz should commit like Vocal, got {}",
-            response.profile.bands[I_WORDS].gain
+            response.profile.bands[I_INTEL].gain > 1.8,
+            "2.5 kHz should be the vocal peak, got {}",
+            response.profile.bands[I_INTEL].gain
         );
+        assert!(response.profile.bands[I_INTEL].gain > response.profile.bands[I_WORDS].gain);
         assert!(response.profile.bands[I_PRES].gain > 1.2);
-        assert!(response.profile.bands[I_NASAL].gain > 0.6);
+        assert!(response.profile.bands[I_HATS].gain > 1.0);
+        assert!(response.profile.bands[I_AIR].gain > 0.8);
         // Unmask, do not flatten the 808/kick.
         assert!(response.profile.bands[I_KICK].gain > -2.3);
         assert!(response.profile.bands[I_KICK].gain < 0.8);
@@ -713,8 +758,140 @@ mod tests {
             "must not scoop 63 Hz just because Diplo is loud, got {}",
             response.profile.bands[I_KICK].gain
         );
-        assert!(response.profile.bands[I_WORDS].gain > 1.2);
+        assert!(response.profile.bands[I_INTEL].gain > 1.4);
         assert!(response.profile.bands[I_PRES].gain > 0.8);
+    }
+
+    #[test]
+    fn rap_groove_unmuffles_vocal_and_opens_snare() {
+        let response = recommend(&RecommendRequest {
+            track: Some(TrackInfo {
+                title: "Eminem - Houdini [Official Music Video]".into(),
+                artist: "EminemVEVO".into(),
+                ..Default::default()
+            }),
+            spectrum: Some(SpectrumBands {
+                sub: 104.0,
+                bass: 98.0,
+                low_mid: 76.0,
+                mid: 70.0,
+                high_mid: 58.0,
+                high: 30.0,
+                rms: 78.0,
+                crack: 52.0,
+                hats: 34.0,
+                air: 14.0,
+            }),
+            target_offsets_db: None,
+        });
+
+        assert!(response.reason.contains("vocal"));
+        assert!(
+            response.profile.bands[I_MUD].gain < 0.0,
+            "400 Hz should unmuffle, got {}",
+            response.profile.bands[I_MUD].gain
+        );
+        assert!(
+            response.profile.bands[I_INTEL].gain > 1.8,
+            "2.5 kHz consonants should be open, got {}",
+            response.profile.bands[I_INTEL].gain
+        );
+        assert!(
+            response.profile.bands[I_ATTACK].gain > 1.6,
+            "4 kHz snare crack should be hearable, got {}",
+            response.profile.bands[I_ATTACK].gain
+        );
+        assert!(
+            response.profile.bands[I_HATS].gain > 0.8,
+            "6.3 kHz should stay open, got {}",
+            response.profile.bands[I_HATS].gain
+        );
+        assert!(
+            response.profile.bands[I_AIR].gain > 0.8,
+            "10 kHz should stay open, got {}",
+            response.profile.bands[I_AIR].gain
+        );
+    }
+
+    #[test]
+    fn song_title_with_night_does_not_mute_air() {
+        let response = recommend(&RecommendRequest {
+            track: Some(TrackInfo {
+                title: "FINNEAS - Let's Fall in Love for the Night (Official Video)".into(),
+                artist: "FINNEAS".into(),
+                ..Default::default()
+            }),
+            spectrum: Some(SpectrumBands {
+                sub: 70.0,
+                bass: 74.0,
+                low_mid: 68.0,
+                mid: 78.0,
+                high_mid: 64.0,
+                high: 34.0,
+                rms: 72.0,
+                crack: 48.0,
+                hats: 32.0,
+                air: 16.0,
+            }),
+            target_offsets_db: None,
+        });
+
+        assert!(!response.reason.contains("night"));
+        assert!(response.reason.contains("vocal"));
+        assert!(
+            response.profile.bands[I_HATS].gain > 1.0,
+            "6.3 kHz muffled, got {}",
+            response.profile.bands[I_HATS].gain
+        );
+        assert!(
+            response.profile.bands[I_AIR].gain > 1.0,
+            "10 kHz muffled, got {}",
+            response.profile.bands[I_AIR].gain
+        );
+        assert!(
+            response.profile.bands[I_SHEEN].gain > 0.6,
+            "12.5 kHz muffled, got {}",
+            response.profile.bands[I_SHEEN].gain
+        );
+        assert!(response.profile.bands[I_ATTACK].gain > 1.6);
+        assert!(
+            response.profile.bands[I_SHEEN].gain >= 0.0,
+            "must not cut 12.5 kHz on a vocal song, got {}",
+            response.profile.bands[I_SHEEN].gain
+        );
+    }
+
+    #[test]
+    fn singer_over_bass_groove_stays_vocal_not_low_end() {
+        let response = recommend(&RecommendRequest {
+            track: Some(TrackInfo {
+                title: "FINNEAS - Let's Fall in Love for the Night (Official Video)".into(),
+                artist: "FINNEAS".into(),
+                ..Default::default()
+            }),
+            spectrum: Some(SpectrumBands {
+                sub: 110.0,
+                bass: 102.0,
+                low_mid: 64.0,
+                mid: 56.0,
+                high_mid: 48.0,
+                high: 28.0,
+                rms: 76.0,
+                crack: 40.0,
+                hats: 26.0,
+                air: 12.0,
+            }),
+            target_offsets_db: None,
+        });
+
+        assert!(
+            response.reason.contains("vocal"),
+            "must not flip to low end, got {}",
+            response.reason
+        );
+        assert!(response.profile.bands[I_INTEL].gain > response.profile.bands[I_KICK].gain);
+        assert!(response.profile.bands[I_SHEEN].gain >= 0.0);
+        assert!(response.profile.bands[I_AIR].gain > 0.6);
     }
 
     #[test]
