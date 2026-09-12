@@ -5,11 +5,13 @@ import {
   loadAudioStatus,
   loadAutoDecision,
   loadEqState,
+  loadTheme,
   loadTrack,
   saveEqState,
+  saveTheme,
   writeSessionLock,
 } from "../shared/storage";
-import type { AudioStatus, AutoDecision, EqBand, EqProfile, FilterType, NormalizedTrack } from "../shared/types";
+import type { AudioStatus, AutoDecision, EqBand, EqProfile, FilterType, NormalizedTrack, ThemeMode } from "../shared/types";
 import { BrandMark } from "./BrandMark";
 import { EqGraph } from "./EqGraph";
 
@@ -37,6 +39,45 @@ function richerTrack(
   if (next.artist && !current.artist) return next;
   if (next.album && !current.album) return next;
   return next;
+}
+
+function ThemeToggle({
+  theme,
+  onToggle,
+}: {
+  theme: ThemeMode;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      className="theme-toggle"
+      type="button"
+      onClick={onToggle}
+      aria-label={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+      title={theme === "dark" ? "Light mode" : "Dark mode"}
+    >
+      {theme === "dark" ? (
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="8" cy="8" r="3.2" stroke="currentColor" strokeWidth="1.5" />
+          <path
+            d="M8 1.6v1.3M8 13.1v1.3M1.6 8h1.3M13.1 8h1.3M3.2 3.2l.9.9M12 12l.9.9M3.2 12.8l.9-.9M12 4.1l.9-.9"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinecap="round"
+          />
+        </svg>
+      ) : (
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path
+            d="M13.2 10.2A5.4 5.4 0 0 1 5.8 2.8 5.5 5.5 0 1 0 13.2 10.2Z"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            strokeLinejoin="round"
+          />
+        </svg>
+      )}
+    </button>
+  );
 }
 
 async function refreshNowPlaying(
@@ -82,6 +123,7 @@ export function App() {
   const [ready, setReady] = useState(false);
   const [audioStatus, setAudioStatus] = useState<AudioStatus | null>(null);
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
+  const [theme, setTheme] = useState<ThemeMode>("dark");
 
   const selected = useMemo(
     () => profile.bands.find((band) => band.id === selectedId) ?? profile.bands[0],
@@ -108,6 +150,10 @@ export function App() {
     });
     void loadAudioStatus().then((status) => {
       if (status) setAudioStatus(status);
+    });
+    void loadTheme().then((next) => {
+      setTheme(next);
+      document.documentElement.dataset.theme = next;
     });
 
     const onStorage = (
@@ -137,6 +183,11 @@ export function App() {
       }
       if (changes.autoDecision?.newValue) {
         setDecision(changes.autoDecision.newValue as AutoDecision);
+      }
+      if (changes.theme?.newValue === "light" || changes.theme?.newValue === "dark") {
+        const next = changes.theme.newValue as ThemeMode;
+        setTheme(next);
+        document.documentElement.dataset.theme = next;
       }
       if (changes.audioStatus?.newValue) {
         const next = changes.audioStatus.newValue as AudioStatus;
@@ -200,6 +251,13 @@ export function App() {
     setEnabled(true);
   }
 
+  function toggleTheme() {
+    const next: ThemeMode = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    document.documentElement.dataset.theme = next;
+    void saveTheme(next);
+  }
+
   function updateBand(patch: Partial<EqBand>) {
     updateProfile({
       ...profile,
@@ -245,6 +303,9 @@ export function App() {
               <span>Listening layer</span>
             </div>
           </div>
+          <div className="header-actions">
+            <ThemeToggle theme={theme} onToggle={toggleTheme} />
+          </div>
         </header>
         <div className="skeleton" aria-hidden="true">
           <div className="skel title" />
@@ -267,15 +328,18 @@ export function App() {
             <span>Listening layer</span>
           </div>
         </div>
-        <button
-          className={enabled ? "toggle on" : "toggle"}
-          onClick={() => setEnabled((value) => !value)}
-          type="button"
-          aria-pressed={enabled}
-        >
-          {enabled ? "On" : "Off"}
-          <span className="switch" />
-        </button>
+        <div className="header-actions">
+          <ThemeToggle theme={theme} onToggle={toggleTheme} />
+          <button
+            className={enabled ? "toggle on" : "toggle"}
+            onClick={() => setEnabled((value) => !value)}
+            type="button"
+            aria-pressed={enabled}
+          >
+            {enabled ? "On" : "Off"}
+            <span className="switch" />
+          </button>
+        </div>
       </header>
 
       <section className={track ? "now-playing" : "now-playing empty"}>
@@ -317,6 +381,7 @@ export function App() {
           profile={profile}
           enabled={enabled}
           selectedId={selected.id}
+          theme={theme}
           onSelect={setSelectedId}
         />
       </section>

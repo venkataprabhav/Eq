@@ -1,6 +1,6 @@
 import { DEFAULT_PROFILE, cloneProfile } from "./presets";
 import { extensionAlive, isContextInvalidated } from "./runtime";
-import type { AudioStatus, AutoDecision, EqProfile, EqState, NormalizedTrack } from "./types";
+import type { AudioStatus, AutoDecision, EqProfile, EqState, NormalizedTrack, ThemeMode } from "./types";
 import { STORAGE_KEYS } from "./types";
 
 function isBand(value: unknown): value is EqProfile["bands"][number] {
@@ -158,6 +158,26 @@ export async function loadAutoDecision(): Promise<AutoDecision | null> {
   } catch (error) {
     if (isContextInvalidated(error)) return null;
     throw error;
+  }
+}
+
+export async function loadTheme(): Promise<ThemeMode> {
+  if (!extensionAlive()) return "dark";
+  try {
+    const stored = await chrome.storage.local.get(STORAGE_KEYS.theme);
+    return stored[STORAGE_KEYS.theme] === "light" ? "light" : "dark";
+  } catch (error) {
+    if (isContextInvalidated(error)) return "dark";
+    throw error;
+  }
+}
+
+export async function saveTheme(theme: ThemeMode): Promise<void> {
+  if (!extensionAlive()) return;
+  try {
+    await chrome.storage.local.set({ [STORAGE_KEYS.theme]: theme });
+  } catch (error) {
+    if (!isContextInvalidated(error)) throw error;
   }
 }
 

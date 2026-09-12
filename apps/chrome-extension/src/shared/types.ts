@@ -1,5 +1,7 @@
 export type FilterType = "peaking" | "lowshelf" | "highshelf";
 
+export type ThemeMode = "dark" | "light";
+
 export interface EqBand {
   id: string;
   type: FilterType;
@@ -63,4 +65,5 @@ export const STORAGE_KEYS = {
   audioStatus: "audioStatus",
   autoDecision: "autoDecision",
   epoch: "epoch",
+  theme: "theme",
 } as const;

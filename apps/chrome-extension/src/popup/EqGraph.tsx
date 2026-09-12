@@ -21,11 +21,13 @@ export function EqGraph({
   profile,
   enabled,
   selectedId,
+  theme,
   onSelect,
 }: {
   profile: EqProfile;
   enabled: boolean;
   selectedId: string;
+  theme: "dark" | "light";
   onSelect: (id: string) => void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -80,9 +82,11 @@ export function EqGraph({
     ctx.lineWidth = 2;
     ctx.stroke();
 
+    const fillOn = styles.getPropertyValue("--curve-fill").trim() || "rgba(196,165,116,0.22)";
+    const fillOff = styles.getPropertyValue("--curve-fill-off").trim() || "rgba(138,133,124,0.12)";
     const fill = ctx.createLinearGradient(0, 0, 0, height);
-    fill.addColorStop(0, enabled ? "rgba(196,165,116,0.22)" : "rgba(138,133,124,0.12)");
-    fill.addColorStop(1, "rgba(11,12,15,0)");
+    fill.addColorStop(0, enabled ? fillOn : fillOff);
+    fill.addColorStop(1, "rgba(0,0,0,0)");
     ctx.lineTo(width, height);
     ctx.lineTo(0, height);
     ctx.closePath();
@@ -100,7 +104,7 @@ export function EqGraph({
       ctx.fillStyle = band.id === selectedId ? text : accent;
       ctx.fill();
     }
-  }, [enabled, profile, selectedId]);
+  }, [enabled, profile, selectedId, theme]);
 
   function handleClick(event: React.MouseEvent<HTMLCanvasElement>) {
     const canvas = canvasRef.current;
