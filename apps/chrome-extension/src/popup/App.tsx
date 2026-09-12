@@ -295,7 +295,7 @@ export function App() {
   const connectionLabel = connected ? "Live" : audioStatus?.error ? "Blocked" : "Waiting";
   const curveName = auto ? "Auto" : activePreset?.name ?? "Custom";
 
-  if (!ready) {
+  if (!ready || !selected) {
     return (
       <div className="app is-loading">
         <header className="header">

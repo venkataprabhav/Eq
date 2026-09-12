@@ -130,10 +130,16 @@ function bandAverage(
 
 export function sampleSpectrum(): SpectrumBands | null {
   let chosen: AttachedGraph | null = null;
+  let bestScore = -1;
   for (const graph of liveGraphs) {
     if (!graph.element.isConnected) continue;
-    if (!chosen || isActive(graph.element)) chosen = graph;
-    if (isActive(graph.element)) break;
+    const active = isAudible(graph.element) || isActive(graph.element);
+    const main = isYouTubeMain(graph.element);
+    const score = (active ? 4 : 0) + (main ? 2 : 0) + (graph.element.currentTime > 0 ? 1 : 0);
+    if (!chosen || score > bestScore) {
+      chosen = graph;
+      bestScore = score;
+    }
   }
   if (!chosen) return null;
   const data = new Uint8Array(chosen.analyser.frequencyBinCount);

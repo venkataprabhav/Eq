@@ -83,7 +83,8 @@ chrome.storage.onChanged.addListener((changes, area) => {
     void syncEq();
   }
   if (changes.auto || changes.epoch) {
-    void runAutoEq(readTrack());
+    resumeGraphs();
+    void syncEq(true).then(() => runAutoEq(readTrack(), { force: true }));
   }
 });
 
@@ -130,6 +131,7 @@ for (const eventName of mediaEvents) {
       resumeGraphs();
       void syncEq();
       publishTrack();
+      void runAutoEq(readTrack(), { force: true });
     },
     true,
   );

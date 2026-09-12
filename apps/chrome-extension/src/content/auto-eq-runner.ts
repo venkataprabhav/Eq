@@ -37,11 +37,13 @@ function resetSession(): void {
   lastApplied = "";
   lastRecommendAt = 0;
   lastPersistAt = 0;
+  inFlight = false;
 }
 
 export function noteAutoSession(auto: boolean, epoch: number): void {
+  const restarted = auto && (session?.auto !== true || session.epoch !== epoch);
   session = { auto, epoch };
-  if (!auto) resetSession();
+  if (!auto || restarted) resetSession();
 }
 
 async function readSession(): Promise<Pick<EqState, "auto" | "epoch">> {
@@ -86,7 +88,7 @@ async function persistAuto(
 
 async function requestRecommend(
   track: NormalizedTrack | null,
-  spectrum: SpectrumBands,
+  spectrum: SpectrumBands | null,
   startedEpoch: number,
 ): Promise<void> {
   if (inFlight) return;
@@ -130,7 +132,10 @@ async function requestRecommend(
   }
 }
 
-export async function runAutoEq(track: NormalizedTrack | null): Promise<void> {
+export async function runAutoEq(
+  track: NormalizedTrack | null,
+  options: { force?: boolean } = {},
+): Promise<void> {
   const current = await readSession();
   if (!current.auto) {
     resetSession();
@@ -144,13 +149,15 @@ export async function runAutoEq(track: NormalizedTrack | null): Promise<void> {
   }
 
   const snapshot = sampleSpectrum();
-  if (!snapshot || snapshot.rms < 8) return;
-
-  ema = ema ? mixSpectrum(ema, snapshot, emaAlpha) : snapshot;
+  if (snapshot && snapshot.rms >= 4) {
+    ema = ema ? mixSpectrum(ema, snapshot, emaAlpha) : snapshot;
+  } else if (!options.force && !ema) {
+    return;
+  }
 
   const now = Date.now();
-  if (lastRecommendAt !== 0 && now - lastRecommendAt < tickMs) return;
-  if (inFlight) return;
+  if (!options.force && lastRecommendAt !== 0 && now - lastRecommendAt < tickMs) return;
+  if (!options.force && inFlight) return;
 
   lastRecommendAt = now;
   await requestRecommend(track, ema, current.epoch);

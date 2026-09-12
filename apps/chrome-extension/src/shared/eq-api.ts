@@ -78,11 +78,16 @@ export async function recommendFromRust(
   spectrum: SpectrumBands | null,
 ): Promise<RecommendApiResponse> {
   try {
-    const reply = (await chrome.runtime.sendMessage({
-      type: "RECOMMEND_EQ",
-      track,
-      spectrum,
-    } satisfies RuntimeMessage)) as RecommendReply | undefined;
+    const reply = (await Promise.race([
+      chrome.runtime.sendMessage({
+        type: "RECOMMEND_EQ",
+        track,
+        spectrum,
+      } satisfies RuntimeMessage) as Promise<RecommendReply | undefined>,
+      new Promise<never>((_, reject) => {
+        window.setTimeout(() => reject(new Error("EQ API timeout")), EQ_API_TIMEOUT_MS + 80);
+      }),
+    ])) as RecommendReply | undefined;
     if (reply?.ok && reply.result) return reply.result;
     if (reply && !reply.ok) {
       throw new Error(reply.error ?? "EQ API failed");
