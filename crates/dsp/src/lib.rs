@@ -1,58 +1,65 @@
-//! Custom EQ curve fitting from track metadata + spectrum.
+//! Enhancement EQ — make the lead elements clearer, not flatten the mix.
 //!
-//! Title text is only a weak hint (speech, night, etc.). The listening curve
-//! comes from mix *features* any similar song can match:
-//!
-//! | Feature | What it means | EQ move |
-//! |---|---|---|
-//! | snare | energy in 2.5–5 kHz (crack) vs mids | cut 2 kHz / 4 kHz |
-//! | hats | 6–10 kHz vs mids | cut 8 kHz, never invent air |
-//! | grit | dense 1–4 kHz (saturation / distorted vocal) | cut 1–2 kHz, do not lift presence |
-//! | crushed | loud + grit + snare/hats | extra preamp cut, keep 125 Hz body |
-//! | dark_air | 10–16 kHz empty while hats still there | YouTube rolloff — do **not** boost 8 kHz |
+//! Loud bands are usually the instruments the song wants you to hear.
+//! Auto enhances those, carves only when something masks the lead, and
+//! tames harshness. Vocals get a living presence curve that moves with
+//! the section (verse / chorus / quiet / groove) about once a second.
 
 use eq_core::{
     track_key, EqBand, EqProfile, FilterType, RecommendRequest, RecommendResponse, SpectrumBands,
     TrackInfo, BAND_COUNT, DEFAULT_FREQUENCIES,
 };
 
-const ENGINE: &str = "universal-eq-rust/0.4";
+const ENGINE: &str = "universal-eq-rust/0.6";
 
-/// Relative band shape only. YouTube streams already roll off the air band,
-/// so we do **not** treat missing 8 kHz as a defect to boost.
-const TARGET_SHAPE: [f32; BAND_COUNT] = [1.00, 1.05, 1.02, 1.00, 1.08, 1.04, 0.98, 0.90];
-const MAX_BOOST: [f32; BAND_COUNT] = [3.0, 2.5, 2.0, 2.0, 2.5, 1.6, 1.2, 0.8];
-const MAX_CUT: [f32; BAND_COUNT] = [3.0, 2.5, 2.0, 2.0, 2.5, 3.5, 4.0, 4.5];
+/// 60, 125, 250, 500, 1k, 2k, 4k, 8k
+const MAX_BOOST: [f32; BAND_COUNT] = [2.4, 2.0, 1.4, 2.6, 3.4, 2.8, 1.6, 0.8];
+const MAX_CUT: [f32; BAND_COUNT] = [2.2, 1.6, 1.4, 1.0, 0.8, 1.0, 2.0, 2.8];
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Lead {
+    Speech,
+    Vocal,
+    Bass,
+    Groove,
+}
+
+impl Lead {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Speech => "speech",
+            Self::Vocal => "vocals",
+            Self::Bass => "low end",
+            Self::Groove => "instruments",
+        }
+    }
+}
 
 pub fn recommend(request: &RecommendRequest) -> RecommendResponse {
     let started = std::time::Instant::now();
     let spectrum = request.spectrum.as_ref();
     let track = request.track.as_ref();
-    let mut meta = metadata_bias(track);
-    apply_mix_policy(&mut meta, spectrum);
+    let meta = metadata_hints(track);
+    let mix = mix_features(spectrum);
     let section = detect_section(spectrum);
-    let measured = relative_shape(spectrum);
-    let target = target_shape(request.target_offsets_db.as_ref(), &meta);
+    let lead = pick_lead(&meta, mix.as_ref());
 
-    let mut gains = [0.0_f32; BAND_COUNT];
-    for i in 0..BAND_COUNT {
-        let error = measured[i] - target[i];
-        let mut gain = -error * (3.2 * meta.spectrum_scale) + meta.gain_bias[i];
-        gain += section_bias(section, i, &meta);
-        if meta.no_air_boost && gain > 0.0 && i >= 5 {
-            gain = 0.0;
+    let mut gains = enhance(lead, mix.as_ref(), &meta, section);
+    apply_device_offsets(&mut gains, request.target_offsets_db.as_ref());
+    if meta.no_air_boost || mix.as_ref().is_some_and(|m| m.dark_air > 0.35) {
+        if gains[7] > 0.0 {
+            gains[7] = 0.0;
         }
-        // Prefer cutting peaks over inventing missing YouTube treble.
-        if gain > 0.0 && i >= 6 {
-            gain *= 0.35;
+        if gains[6] > 0.6 {
+            gains[6] = 0.6;
         }
-        gains[i] = gain.clamp(-MAX_CUT[i], MAX_BOOST[i]);
     }
-
+    clamp_gains(&mut gains);
     smooth_gains(&mut gains);
-    let preamp = compute_preamp(&gains, meta.preamp_bias + section_preamp(section));
+
+    let preamp = compute_preamp(&gains, &meta, mix.as_ref(), section);
     let profile = build_profile(&gains, preamp);
-    let reason = explain(track, spectrum, &gains, &meta, section);
+    let reason = explain(track, spectrum, &gains, &meta, section, lead);
 
     RecommendResponse {
         profile,
@@ -63,26 +70,26 @@ pub fn recommend(request: &RecommendRequest) -> RecommendResponse {
     }
 }
 
-struct MetaBias {
-    gain_bias: [f32; BAND_COUNT],
-    preamp_bias: f32,
+struct MetaHints {
     tags: Vec<&'static str>,
-    spectrum_scale: f32,
+    vocal: bool,
+    speech: bool,
+    bass_heavy: bool,
+    night: bool,
     no_air_boost: bool,
-    crushed: bool,
 }
 
-fn metadata_bias(track: Option<&TrackInfo>) -> MetaBias {
-    let mut bias = MetaBias {
-        gain_bias: [0.0; BAND_COUNT],
-        preamp_bias: 0.0,
+fn metadata_hints(track: Option<&TrackInfo>) -> MetaHints {
+    let mut hints = MetaHints {
         tags: Vec::new(),
-        spectrum_scale: 1.0,
+        vocal: false,
+        speech: false,
+        bass_heavy: false,
+        night: false,
         no_air_boost: false,
-        crushed: false,
     };
     let Some(track) = track else {
-        return bias;
+        return hints;
     };
     let text = format!(
         "{} {} {}",
@@ -103,15 +110,8 @@ fn metadata_bias(track: Option<&TrackInfo>) -> MetaBias {
             "full episode",
         ],
     ) {
-        bias.tags.push("speech");
-        // Cut rumble, lift presence.
-        bias.gain_bias[0] -= 2.5;
-        bias.gain_bias[1] -= 1.5;
-        bias.gain_bias[3] += 1.2;
-        bias.gain_bias[4] += 2.0;
-        bias.gain_bias[5] += 1.0;
-        bias.gain_bias[7] -= 1.0;
-        bias.preamp_bias -= 0.5;
+        hints.speech = true;
+        hints.tags.push("speech");
     }
 
     if contains_any(
@@ -121,13 +121,8 @@ fn metadata_bias(track: Option<&TrackInfo>) -> MetaBias {
             "dnb",
         ],
     ) {
-        bias.tags.push("bass-heavy");
-        // Control boom, keep punch.
-        bias.gain_bias[0] -= 1.5;
-        bias.gain_bias[1] -= 0.8;
-        bias.gain_bias[2] += 0.4;
-        bias.gain_bias[6] += 0.6;
-        bias.preamp_bias -= 1.0;
+        hints.bass_heavy = true;
+        hints.tags.push("bass-heavy");
     }
 
     if contains_any(
@@ -140,27 +135,26 @@ fn metadata_bias(track: Option<&TrackInfo>) -> MetaBias {
             "karaoke",
             "a cappella",
             "lyrics",
+            " ft.",
+            " ft ",
+            "feat.",
+            "featuring",
         ],
     ) {
-        bias.tags.push("vocal");
-        bias.gain_bias[0] -= 1.2;
-        bias.gain_bias[1] -= 0.6;
-        bias.gain_bias[3] += 0.8;
-        bias.gain_bias[4] += 1.5;
-        bias.gain_bias[5] += 1.0;
+        hints.vocal = true;
+        hints.tags.push("featured vocal");
     }
 
     if contains_any(
         &text,
         &["lofi", "lo-fi", "chillhop", "sleep", "rain", "ambient", "night"],
     ) {
-        bias.tags.push("night");
-        bias.gain_bias[6] -= 1.0;
-        bias.gain_bias[7] -= 1.5;
-        bias.preamp_bias -= 2.0;
+        hints.night = true;
+        hints.no_air_boost = true;
+        hints.tags.push("night");
     }
 
-    bias
+    hints
 }
 
 fn contains_any(haystack: &str, needles: &[&str]) -> bool {
@@ -177,6 +171,9 @@ struct MixFeatures {
     grit: f32,
     crushed: f32,
     dark_air: f32,
+    vocal: f32,
+    boom: f32,
+    mud: f32,
 }
 
 fn mix_features(spectrum: Option<&SpectrumBands>) -> Option<MixFeatures> {
@@ -189,15 +186,18 @@ fn mix_features(spectrum: Option<&SpectrumBands>) -> Option<MixFeatures> {
     let hat_energy = if s.hats > 1.0 { s.hats } else { s.high * 0.9 };
     let air = if s.air > 1.0 { s.air } else { s.high * 0.55 };
 
-    // Strong snare/clap: crack band as hot as or hotter than the vocal mid.
     let snare = unit((crack / mid - 0.62) / 0.55);
-    // Loud hats: 6–10 kHz drive, not 12 kHz air.
     let hats = unit((hat_energy / mid - 0.42) / 0.55);
-    // Distorted / saturated vocal: mids are full and 2–5 kHz is not scooped.
-    let grit = unit(((s.mid + s.low_mid) / 2.0 - 52.0) / 40.0)
-        * unit((crack / mid - 0.48) / 0.4);
+    let grit = unit(((s.mid + s.low_mid) / 2.0 - 52.0) / 40.0) * unit((crack / mid - 0.48) / 0.4);
     let dark_air = unit((hat_energy - air) / 28.0);
     let crushed = unit((s.rms - 55.0) / 35.0) * unit((snare + hats + grit) / 1.6);
+    let boom = unit(((s.sub + s.bass) / mid - 1.55) / 1.1);
+    let mud = unit((s.low_mid / mid - 0.92) / 0.45);
+    // 808s often out-energy the singer in a crude FFT. If mids are alive,
+    // treat that as vocal/lead-instrument energy — not "no vocal".
+    let vocal_energy = unit((s.mid - 44.0) / 36.0);
+    let vocal_ratio = unit((s.mid / s.bass.max(1.0) - 0.48) / 0.75);
+    let vocal = (0.58 * vocal_energy + 0.42 * vocal_ratio * vocal_energy).clamp(0.0, 1.0);
 
     Some(MixFeatures {
         snare,
@@ -205,85 +205,185 @@ fn mix_features(spectrum: Option<&SpectrumBands>) -> Option<MixFeatures> {
         grit,
         crushed,
         dark_air,
+        vocal,
+        boom,
+        mud,
     })
 }
 
-fn apply_mix_policy(bias: &mut MetaBias, spectrum: Option<&SpectrumBands>) {
-    let Some(mix) = mix_features(spectrum) else {
-        return;
-    };
-
-    if mix.snare > 0.25 {
-        bias.tags.push("hot snare");
-        bias.gain_bias[5] -= 2.2 * mix.snare;
-        bias.gain_bias[6] -= 3.2 * mix.snare;
+fn pick_lead(meta: &MetaHints, mix: Option<&MixFeatures>) -> Lead {
+    if meta.speech {
+        return Lead::Speech;
     }
-    if mix.hats > 0.25 {
-        bias.tags.push("loud hats");
-        bias.gain_bias[6] -= 1.1 * mix.hats;
-        bias.gain_bias[7] -= 4.0 * mix.hats;
+    let vocal = mix.map(|m| m.vocal).unwrap_or(0.0);
+    let boom = mix.map(|m| m.boom).unwrap_or(0.0);
+    // Featured singers and mid-forward mixes win over "there's also bass".
+    if meta.vocal || vocal > 0.34 {
+        return Lead::Vocal;
     }
-    if mix.grit > 0.25 {
-        bias.tags.push("saturated vocal");
-        bias.gain_bias[4] -= 1.4 * mix.grit;
-        bias.gain_bias[5] -= 1.2 * mix.grit;
+    if meta.bass_heavy || boom > 0.42 {
+        return Lead::Bass;
     }
-    if mix.dark_air > 0.35 && (mix.hats > 0.2 || mix.snare > 0.2) {
-        bias.no_air_boost = true;
-        bias.tags.push("stream-dark air");
-    }
-    if mix.crushed > 0.3 {
-        bias.crushed = true;
-        bias.no_air_boost = true;
-        bias.spectrum_scale = (1.0 - 0.7 * mix.crushed).max(0.2);
-        bias.preamp_bias -= 2.4 * mix.crushed;
-        bias.gain_bias[1] += 0.7 * mix.crushed;
-        bias.gain_bias[2] += 0.4 * mix.crushed;
-        bias.tags.push("crushed mix");
-    }
+    Lead::Groove
 }
 
-fn raw_bands(s: &SpectrumBands) -> [f32; BAND_COUNT] {
+/// Build an enhancement curve. No inverse-EQ / flatten-to-target.
+fn enhance(
+    lead: Lead,
+    mix: Option<&MixFeatures>,
+    meta: &MetaHints,
+    section: &str,
+) -> [f32; BAND_COUNT] {
+    let mut gains = match lead {
+        Lead::Speech => speech_curve(),
+        Lead::Vocal => vocal_curve(mix, meta, section),
+        Lead::Bass => bass_curve(mix),
+        Lead::Groove => groove_curve(mix),
+    };
+
+    if let Some(mix) = mix {
+        tame_harshness(&mut gains, mix);
+        if mix.mud > 0.35 && lead != Lead::Speech {
+            gains[2] -= 0.6 * mix.mud;
+        }
+    }
+
+    if meta.night {
+        gains[6] -= 0.6;
+        gains[7] -= 1.2;
+    }
+
+    // Loud / crushed masters: keep the shape, just don't slam the boosts.
+    if let Some(mix) = mix {
+        if mix.crushed > 0.35 {
+            let scale = 1.0 - 0.22 * mix.crushed;
+            for g in gains.iter_mut() {
+                if *g > 0.0 {
+                    *g *= scale;
+                }
+            }
+        }
+    }
+
+    gains
+}
+
+fn speech_curve() -> [f32; BAND_COUNT] {
+    [-2.2, -1.4, 0.3, 1.8, 2.8, 1.6, 0.2, -1.2]
+}
+
+/// Same idea as the Vocal preset: clear rumble a little, commit to words.
+/// Bass is only carved when it is masking the singer — never flattened.
+fn vocal_curve(mix: Option<&MixFeatures>, meta: &MetaHints, section: &str) -> [f32; BAND_COUNT] {
+    let measured = mix.map(|m| (0.48 + 0.52 * m.vocal).clamp(0.50, 1.0)).unwrap_or(0.72);
+    let v = if meta.vocal { measured.max(0.72) } else { measured };
+    let boom = mix.map(|m| m.boom).unwrap_or(0.0);
+    let grit = mix.map(|m| m.grit).unwrap_or(0.0);
+    let hats = mix.map(|m| m.hats).unwrap_or(0.0);
+    let snare = mix.map(|m| m.snare).unwrap_or(0.0);
+    let sung = mix.map(|m| m.vocal).unwrap_or(0.0);
+
+    // If the vocal is already saturated in 1–2 kHz, keep the lift but lean
+    // into body (500) instead of piling more grit.
+    let presence = 1.0 - 0.28 * grit;
+    let air = (1.0 - 0.50 * hats) * (1.0 - 0.28 * snare);
+
+    let mut gains = [
+        -1.1 * v - 0.5 * boom * v,
+        -0.55 * v,
+        0.0,
+        1.6 * v + 0.4 * grit,
+        2.9 * v * presence,
+        2.3 * v * presence,
+        0.7 * v * air,
+        -0.55 * v,
+    ];
+
+    match section {
+        "verse" => {
+            gains[3] += 0.25;
+            gains[4] += 0.45;
+            gains[5] += 0.55;
+            gains[0] -= 0.15;
+        }
+        "chorus" => {
+            // Keep the drop. Vocal stays forward; do not scoop the production.
+            gains[0] += 0.45 * v;
+            gains[1] += 0.25 * v;
+            gains[4] += 0.20;
+            gains[5] += 0.25;
+        }
+        "quiet" => {
+            gains[4] += 0.55;
+            gains[5] += 0.45;
+            gains[0] -= 0.20;
+        }
+        "groove" => {
+            // Bass-heavy beat under a singer is still a vocal mix.
+            // Only back off words in a true instrumental pocket.
+            if sung < 0.22 && !meta.vocal {
+                gains[0] += 0.55 * v;
+                gains[4] -= 0.25;
+                gains[5] -= 0.15;
+            } else {
+                gains[0] += 0.40 * v;
+                gains[1] += 0.15 * v;
+            }
+        }
+        _ => {}
+    }
+
+    gains
+}
+
+fn bass_curve(mix: Option<&MixFeatures>) -> [f32; BAND_COUNT] {
+    let boom = mix.map(|m| (0.55 + 0.45 * m.boom).clamp(0.55, 1.0)).unwrap_or(0.7);
     [
-        s.sub.max(1.0),
-        s.bass.max(1.0),
-        ((s.bass + s.low_mid) * 0.5).max(1.0),
-        s.low_mid.max(1.0),
-        s.mid.max(1.0),
-        ((s.mid + s.high_mid) * 0.5).max(1.0),
-        s.high_mid.max(1.0),
-        s.high.max(1.0),
+        1.8 * boom,
+        1.15 * boom,
+        0.15,
+        0.0,
+        0.35,
+        0.85,
+        0.35,
+        -0.2,
     ]
 }
 
-fn relative_shape(spectrum: Option<&SpectrumBands>) -> [f32; BAND_COUNT] {
-    let Some(s) = spectrum else {
-        return TARGET_SHAPE;
-    };
-    if s.rms < 8.0 {
-        return TARGET_SHAPE;
-    }
-    let raw = raw_bands(s);
-    let mean = raw.iter().sum::<f32>() / BAND_COUNT as f32;
-    let mut shape = [1.0_f32; BAND_COUNT];
-    for i in 0..BAND_COUNT {
-        shape[i] = (raw[i] / mean.max(1.0)).clamp(0.35, 2.2);
-    }
-    shape
+fn groove_curve(mix: Option<&MixFeatures>) -> [f32; BAND_COUNT] {
+    let boom = mix.map(|m| m.boom).unwrap_or(0.25);
+    [
+        1.3 + 0.5 * boom,
+        0.8,
+        0.0,
+        0.45,
+        0.7,
+        1.35,
+        0.75,
+        0.25,
+    ]
 }
 
-fn target_shape(offsets: Option<&[f32; BAND_COUNT]>, meta: &MetaBias) -> [f32; BAND_COUNT] {
-    let mut target = TARGET_SHAPE;
-    if let Some(off) = offsets {
-        for i in 0..BAND_COUNT {
-            target[i] = (target[i] + off[i] / 24.0).clamp(0.5, 1.6);
+fn tame_harshness(gains: &mut [f32; BAND_COUNT], mix: &MixFeatures) {
+    if mix.hats > 0.45 {
+        gains[7] -= 1.4 * mix.hats;
+        if mix.hats > 0.7 {
+            gains[6] -= 0.5 * (mix.hats - 0.7);
         }
     }
-    if meta.tags.contains(&"speech") {
-        target[0] *= 0.85;
-        target[4] = (target[4] + 0.08).min(1.5);
+    if mix.snare > 0.75 && mix.crushed > 0.45 {
+        // Only when the crack is actually painful — do not suppress a healthy snare.
+        gains[6] -= 0.6 * (mix.snare - 0.75);
     }
-    target
+}
+
+fn apply_device_offsets(gains: &mut [f32; BAND_COUNT], offsets: Option<&[f32; BAND_COUNT]>) {
+    let Some(off) = offsets else {
+        return;
+    };
+    for i in 0..BAND_COUNT {
+        gains[i] += off[i] * 0.5;
+    }
 }
 
 fn detect_section(spectrum: Option<&SpectrumBands>) -> &'static str {
@@ -302,31 +402,9 @@ fn detect_section(spectrum: Option<&SpectrumBands>) -> &'static str {
     }
 }
 
-fn section_bias(section: &str, band: usize, meta: &MetaBias) -> f32 {
-    if meta.crushed || meta.no_air_boost {
-        return match section {
-            "chorus" if band >= 5 => -0.9,
-            "chorus" if band <= 1 => -0.3,
-            "verse" if (4..=6).contains(&band) => -0.5,
-            "quiet" if band >= 6 => 0.7,
-            _ => 0.0,
-        };
-    }
-    match section {
-        "chorus" if band <= 1 => -0.8,
-        "chorus" if band >= 6 => -0.4,
-        "verse" if (3..=5).contains(&band) => 0.6,
-        "verse" if band <= 1 => -0.4,
-        "quiet" => 0.0,
-        _ => 0.0,
-    }
-}
-
-fn section_preamp(section: &str) -> f32 {
-    match section {
-        "chorus" => -0.8,
-        "quiet" => 0.4,
-        _ => 0.0,
+fn clamp_gains(gains: &mut [f32; BAND_COUNT]) {
+    for i in 0..BAND_COUNT {
+        gains[i] = gains[i].clamp(-MAX_CUT[i], MAX_BOOST[i]);
     }
 }
 
@@ -339,13 +417,30 @@ fn smooth_gains(gains: &mut [f32; BAND_COUNT]) {
         } else {
             original[i + 1]
         };
-        gains[i] = (left * 0.2 + original[i] * 0.6 + right * 0.2).clamp(-MAX_CUT[i], MAX_BOOST[i]);
+        gains[i] = (left * 0.15 + original[i] * 0.70 + right * 0.15).clamp(-MAX_CUT[i], MAX_BOOST[i]);
     }
 }
 
-fn compute_preamp(gains: &[f32; BAND_COUNT], bias: f32) -> f32 {
+fn compute_preamp(
+    gains: &[f32; BAND_COUNT],
+    meta: &MetaHints,
+    mix: Option<&MixFeatures>,
+    section: &str,
+) -> f32 {
     let peak = gains.iter().cloned().fold(0.0_f32, f32::max);
-    (-peak * 0.7 - 0.3 + bias).clamp(-5.0, 0.0)
+    let mut bias = -0.35;
+    if meta.night {
+        bias -= 1.6;
+    }
+    if let Some(mix) = mix {
+        bias -= 1.1 * mix.crushed;
+    }
+    bias += match section {
+        "chorus" => -0.25,
+        "quiet" => 0.25,
+        _ => 0.0,
+    };
+    (-peak * 0.32 + bias).clamp(-4.5, 0.0)
 }
 
 fn build_profile(gains: &[f32; BAND_COUNT], preamp: f32) -> EqProfile {
@@ -359,10 +454,7 @@ fn build_profile(gains: &[f32; BAND_COUNT], preamp: f32) -> EqProfile {
                 _ => FilterType::Peaking,
             };
             let q = match filter_type {
-                FilterType::Peaking => {
-                    // Narrower cuts/boosts when gain is large.
-                    (0.7 + gains[i].abs() * 0.08).clamp(0.5, 1.8)
-                }
+                FilterType::Peaking => (0.75 + gains[i].abs() * 0.07).clamp(0.6, 1.6),
                 _ => 0.7,
             };
             EqBand {
@@ -387,23 +479,23 @@ fn explain(
     track: Option<&TrackInfo>,
     spectrum: Option<&SpectrumBands>,
     gains: &[f32; BAND_COUNT],
-    meta: &MetaBias,
+    meta: &MetaHints,
     section: &str,
+    lead: Lead,
 ) -> String {
     let title = track
         .map(|t| t.title.as_str())
         .filter(|t| !t.is_empty())
         .unwrap_or("this track");
 
-    let mut parts = Vec::new();
-    if !meta.tags.is_empty() {
-        parts.push(format!("metadata hints ({})", meta.tags.join(", ")));
-    }
-    if spectrum.map(|s| s.rms >= 8.0).unwrap_or(false) {
-        parts.push("live spectrum fit".into());
+    let live = spectrum.map(|s| s.rms >= 8.0).unwrap_or(false);
+    let source = if live {
+        "live mix"
+    } else if !meta.tags.is_empty() {
+        "title hints"
     } else {
-        parts.push("metadata-only fit".into());
-    }
+        "default music curve"
+    };
 
     let max_i = gains
         .iter()
@@ -416,8 +508,8 @@ fn explain(
     let action = if g >= 0.0 { "lift" } else { "cut" };
 
     format!(
-        "{title} | {section} | {} | strongest {action} near {freq:.0} Hz ({g:+.1} dB).",
-        parts.join(" + ")
+        "enhancing {lead} in the {section} of {title} ({source}) — strongest {action} near {freq:.0} Hz ({g:+.1} dB).",
+        lead = lead.as_str()
     )
 }
 
@@ -427,7 +519,7 @@ mod tests {
     use eq_core::{RecommendRequest, SpectrumBands, TrackInfo};
 
     #[test]
-    fn returns_custom_not_preset_id() {
+    fn heavy_low_end_without_vocal_enhances_bass() {
         let response = recommend(&RecommendRequest {
             track: Some(TrackInfo {
                 title: "Test Song".into(),
@@ -450,10 +542,13 @@ mod tests {
         assert_eq!(response.profile.id, "custom");
         assert_eq!(response.profile.bands.len(), BAND_COUNT);
         assert!(response.latency_ms < 500);
-        // Heavy low end should produce a low-band cut.
-        assert!(response.profile.bands[0].gain < 0.0);
-        // YouTube-dark highs must not get a large air boost.
-        assert!(response.profile.bands[7].gain < 2.0);
+        assert!(
+            response.profile.bands[0].gain > 0.4,
+            "bass-led mix should get a low-end lift, got {}",
+            response.profile.bands[0].gain
+        );
+        assert!(response.profile.bands[7].gain < 1.0);
+        assert!(response.reason.contains("low end"));
     }
 
     #[test]
@@ -469,7 +564,8 @@ mod tests {
         });
 
         assert!(response.profile.bands[4].gain > response.profile.bands[0].gain);
-        assert!(response.reason.contains("speech") || response.reason.contains("metadata"));
+        assert!(response.profile.bands[4].gain > 1.5);
+        assert!(response.reason.contains("speech"));
     }
 
     fn crushed_hot_top_spectrum() -> SpectrumBands {
@@ -488,7 +584,7 @@ mod tests {
     }
 
     #[test]
-    fn crushed_mix_cuts_snare_hats_and_vocal_grit() {
+    fn crushed_mix_keeps_presence_and_only_tames_harsh_hats() {
         let response = recommend(&RecommendRequest {
             track: Some(TrackInfo {
                 title: "Any Similar Song".into(),
@@ -499,28 +595,93 @@ mod tests {
             target_offsets_db: None,
         });
 
+        // Dense mix still has a vocal/mid lead — enhance it, do not scoop it.
+        assert!(response.profile.bands[4].gain > 0.8);
+        assert!(response.profile.bands[5].gain > 0.4);
+        assert!(response.profile.bands[7].gain <= 0.2);
+        assert!(response.profile.preamp < 0.0);
+    }
+
+    #[test]
+    fn vocal_forward_pop_lifts_presence() {
+        let response = recommend(&RecommendRequest {
+            track: Some(TrackInfo {
+                title: "Genius ft. Sia, Diplo, Labrinth".into(),
+                artist: "LSD".into(),
+                ..Default::default()
+            }),
+            spectrum: Some(SpectrumBands {
+                sub: 72.0,
+                bass: 74.0,
+                low_mid: 66.0,
+                mid: 80.0,
+                high_mid: 72.0,
+                high: 36.0,
+                rms: 70.0,
+                crack: 58.0,
+                hats: 40.0,
+                air: 18.0,
+            }),
+            target_offsets_db: None,
+        });
+
+        assert!(response.reason.contains("vocal"));
         assert!(
-            response.reason.contains("hot snare")
-                || response.reason.contains("loud hats")
-                || response.reason.contains("saturated")
-                || response.reason.contains("crushed")
+            response.profile.bands[4].gain > 1.6,
+            "1 kHz should commit like Vocal, got {}",
+            response.profile.bands[4].gain
         );
-        assert!(response.profile.bands[5].gain < -1.5);
-        assert!(response.profile.bands[6].gain < -2.5);
-        assert!(response.profile.bands[7].gain <= -2.5);
-        assert!(response.profile.bands[7].gain <= 0.0);
-        assert!(response.profile.preamp <= -1.5);
+        assert!(response.profile.bands[5].gain > 1.2);
+        assert!(response.profile.bands[3].gain > 0.6);
+        // Unmask, do not flatten the 808/kick.
+        assert!(response.profile.bands[0].gain > -2.3);
+        assert!(response.profile.bands[0].gain < 0.8);
+        assert!(response.profile.bands[6].gain > -1.2);
+    }
+
+    #[test]
+    fn featured_vocal_plus_bass_does_not_flatten_the_low_end() {
+        let response = recommend(&RecommendRequest {
+            track: Some(TrackInfo {
+                title: "Genius ft. Sia, Diplo, Labrinth".into(),
+                artist: "LSD".into(),
+                ..Default::default()
+            }),
+            spectrum: Some(SpectrumBands {
+                sub: 120.0,
+                bass: 110.0,
+                low_mid: 70.0,
+                mid: 68.0,
+                high_mid: 60.0,
+                high: 34.0,
+                rms: 82.0,
+                crack: 52.0,
+                hats: 38.0,
+                air: 16.0,
+            }),
+            target_offsets_db: None,
+        });
+
+        assert!(response.reason.contains("vocal"));
+        assert!(
+            response.profile.bands[0].gain > -2.2,
+            "must not scoop 60 Hz just because Diplo is loud, got {}",
+            response.profile.bands[0].gain
+        );
+        assert!(response.profile.bands[4].gain > 1.2);
+        assert!(response.profile.bands[5].gain > 0.8);
     }
 
     #[test]
     fn same_mix_features_match_regardless_of_title() {
+        let spectrum = crushed_hot_top_spectrum();
         let a = recommend(&RecommendRequest {
             track: Some(TrackInfo {
                 title: "Loser".into(),
                 artist: "Tame Impala".into(),
                 ..Default::default()
             }),
-            spectrum: Some(crushed_hot_top_spectrum()),
+            spectrum: Some(spectrum.clone()),
             target_offsets_db: None,
         });
         let b = recommend(&RecommendRequest {
@@ -529,7 +690,7 @@ mod tests {
                 artist: "Different Artist".into(),
                 ..Default::default()
             }),
-            spectrum: Some(crushed_hot_top_spectrum()),
+            spectrum: Some(spectrum),
             target_offsets_db: None,
         });
 
