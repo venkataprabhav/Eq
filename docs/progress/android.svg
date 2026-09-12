@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="240" height="18" role="img" aria-label="0%">
+  <rect width="240" height="18" rx="9" fill="#2A2A2A"/>
+  <rect width="0" height="18" rx="9" fill="#3DDC84"/>
+  <text x="120" y="13" text-anchor="middle" fill="#F4F1EA" font-size="11" font-family="ui-sans-serif, system-ui, sans-serif">0%</text>
+</svg>

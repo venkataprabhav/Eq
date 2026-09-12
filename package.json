@@ -9,6 +9,7 @@
     "build": "npm run build --prefix apps/chrome-extension",
     "api": "cargo run -p universal-eq-api",
     "api:release": "cargo run -p universal-eq-api --release",
-    "test:rust": "cargo test --workspace"
+    "test:rust": "cargo test --workspace",
+    "progress": "node scripts/update-progress.mjs"
   }
 }

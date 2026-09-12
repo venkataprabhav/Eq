@@ -1,0 +1,38 @@
+name: Update progress bars
+
+on:
+  push:
+    paths:
+      - PROGRESS.md
+      - scripts/update-progress.mjs
+      - .github/workflows/update-progress.yml
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Recalculate bars
+        run: node scripts/update-progress.mjs
+
+      - name: Commit if the bars changed
+        run: |
+          git add README.md docs/progress
+          if git diff --cached --quiet; then
+            echo "Progress bars already up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Update platform progress bars"
+          git push
