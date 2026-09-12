@@ -4,15 +4,13 @@ import { loadEqState, saveAutoDecision, saveEqState } from "../shared/storage";
 import type { AutoDecision, EqProfile, NormalizedTrack } from "../shared/types";
 import { sampleSpectrum } from "./audio-graph";
 
-const minIntervalMs = 800;
-const maxIntervalMs = 1400;
+const tickMs = 1000;
 let samples: SpectrumBands[] = [];
 let lastKey = "";
 let lastApplied = "";
 let inFlight = false;
 let didEarlyRecommend = false;
 let lastRecommendAt = 0;
-let lastSpectrumSent: SpectrumBands | null = null;
 
 function averageSpectrum(list: SpectrumBands[]): SpectrumBands {
   const total = list.reduce(
@@ -56,28 +54,11 @@ function averageSpectrum(list: SpectrumBands[]): SpectrumBands {
   };
 }
 
-function spectralFlux(a: SpectrumBands | null, b: SpectrumBands | null): number {
-  if (!a || !b) return 999;
-  return (
-    Math.abs(a.sub - b.sub) +
-    Math.abs(a.bass - b.bass) +
-    Math.abs(a.lowMid - b.lowMid) +
-    Math.abs(a.mid - b.mid) +
-    Math.abs(a.highMid - b.highMid) +
-    Math.abs(a.high - b.high) +
-    Math.abs(a.crack - b.crack) +
-    Math.abs(a.hats - b.hats) +
-    Math.abs(a.air - b.air) +
-    Math.abs(a.rms - b.rms) * 0.4
-  );
-}
-
 function resetSession(): void {
   samples = [];
   lastApplied = "";
   didEarlyRecommend = false;
   lastRecommendAt = 0;
-  lastSpectrumSent = null;
 }
 
 async function applyCustomProfile(
@@ -166,25 +147,15 @@ export async function runAutoEq(track: NormalizedTrack | null): Promise<void> {
   const snapshot = sampleSpectrum();
   if (snapshot && snapshot.rms >= 8) {
     samples.push(snapshot);
-    if (samples.length > 10) samples.shift();
+    if (samples.length > 4) samples.shift();
   }
+
+  if (inFlight || samples.length < 2) return;
 
   const now = Date.now();
-  if (!didEarlyRecommend && key) {
-    didEarlyRecommend = true;
-    lastRecommendAt = now;
-    await requestRecommend(track, null, state.epoch);
-    return;
-  }
+  if (didEarlyRecommend && now - lastRecommendAt < tickMs) return;
 
-  if (samples.length < 3 || inFlight) return;
-
-  const avg = averageSpectrum(samples);
-  const moved = spectralFlux(avg, lastSpectrumSent);
-  const interval = moved > 42 ? minIntervalMs : maxIntervalMs;
-  if (now - lastRecommendAt < interval) return;
-
-  lastSpectrumSent = avg;
+  didEarlyRecommend = true;
   lastRecommendAt = now;
-  await requestRecommend(track, avg, state.epoch);
+  await requestRecommend(track, averageSpectrum(samples), state.epoch);
 }
