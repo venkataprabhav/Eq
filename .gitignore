@@ -6,4 +6,5 @@ dist/
 Thumbs.db
 apps/chrome-extension/dist/
 target/
+target-gnu/
 **/*.rs.bk
