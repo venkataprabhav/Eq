@@ -64,6 +64,15 @@ pub struct SpectrumBands {
     pub high_mid: f32,
     pub high: f32,
     pub rms: f32,
+    /// Snare / clap crack, ~2.5–5 kHz. Optional; 0 = derive from high_mid.
+    #[serde(default)]
+    pub crack: f32,
+    /// Closed-hat tick, ~6–10 kHz. Optional; 0 = derive from high.
+    #[serde(default)]
+    pub hats: f32,
+    /// True air, ~10–16 kHz. YouTube often empty here even when hats are loud.
+    #[serde(default)]
+    pub air: f32,
 }
 
 impl Default for SpectrumBands {
@@ -76,6 +85,9 @@ impl Default for SpectrumBands {
             high_mid: 0.0,
             high: 0.0,
             rms: 0.0,
+            crack: 0.0,
+            hats: 0.0,
+            air: 0.0,
         }
     }
 }
