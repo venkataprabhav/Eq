@@ -26,16 +26,65 @@ System-wide WASAPI EQ, the Tauri desktop app, and Android / iOS are still later 
 
 ## Prerequisites
 
-- Node 22 (`nvm use`)
-- Rust (`cargo --version`)
+- Node 22 (`nvm use`) — only needed for the Chrome extension
+- Rust (`cargo --version`) — needed for the backend
 
-## Run the Rust API
+If Cargo is missing, install [rustup](https://rustup.rs/) and reopen the terminal.
+
+## Run the backend
+
+The backend is the local Rust API in `services/api`. Auto in the Chrome extension calls it. Nothing is hosted in the cloud.
+
+1. Open a terminal in the **repo root** (`Eq`), not inside `services/api`.
+2. Start it:
 
 ```bash
 cargo run -p universal-eq-api
 ```
 
-Listens on `http://127.0.0.1:8787`.
+Or:
+
+```bash
+npm run api
+```
+
+First run will compile for a minute. After that it should print:
+
+```text
+Universal EQ API listening on http://127.0.0.1:8787
+POST /v1/eq/recommend  GET /health
+```
+
+Leave that terminal open. Stop it with `Ctrl+C`.
+
+Release build (faster, slower to compile):
+
+```bash
+npm run api:release
+```
+
+### Check it is up
+
+PowerShell:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8787/health
+```
+
+You should see `"ok": true`.
+
+### Optional: change the port
+
+```powershell
+$env:UNIVERSAL_EQ_PORT = "9000"
+cargo run -p universal-eq-api
+```
+
+The extension expects `8787` unless you change that too.
+
+### If Cargo fails on Windows
+
+This repo pins the GNU toolchain in `rust-toolchain.toml` because MSVC `link.exe` was missing. If you have Visual Studio Build Tools, you can switch later. Until then, `rustup` should install `stable-x86_64-pc-windows-gnu` automatically when you run Cargo from this folder.
 
 ## Chrome extension
 

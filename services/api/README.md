@@ -10,7 +10,7 @@ within a **500ms** timeout.
 
 ## Run
 
-From the repo root (Rust required):
+From the **repo root** (Rust required), not this folder:
 
 ```bash
 cargo run -p universal-eq-api
@@ -22,7 +22,15 @@ Or:
 npm run api
 ```
 
-Health check:
+It listens on `http://127.0.0.1:8787`. Override with `UNIVERSAL_EQ_PORT`. Leave the process running; Auto in the extension calls it on that address.
+
+Health check (PowerShell):
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8787/health
+```
+
+Or:
 
 ```bash
 curl http://127.0.0.1:8787/health
