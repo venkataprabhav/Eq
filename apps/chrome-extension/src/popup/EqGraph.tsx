@@ -43,7 +43,13 @@ export function EqGraph({
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, width, height);
 
-    ctx.strokeStyle = "#2a2d35";
+    const styles = getComputedStyle(canvas);
+    const line = styles.getPropertyValue("--line-strong").trim() || "rgba(243,239,230,0.14)";
+    const accent = styles.getPropertyValue("--accent").trim() || "#c4a574";
+    const muted = styles.getPropertyValue("--muted").trim() || "#8a857c";
+    const text = styles.getPropertyValue("--text").trim() || "#f3efe6";
+
+    ctx.strokeStyle = line;
     ctx.lineWidth = 1;
     for (const freq of [20, 50, 100, 200, 500, 1000, 2000, 5000, 10000, 20000]) {
       const x = xFor(freq, width);
@@ -70,13 +76,13 @@ export function EqGraph({
       if (i === 0) ctx.moveTo(x, y);
       else ctx.lineTo(x, y);
     });
-    ctx.strokeStyle = enabled ? "#e8a54b" : "#6b675f";
+    ctx.strokeStyle = enabled ? accent : muted;
     ctx.lineWidth = 2;
     ctx.stroke();
 
     const fill = ctx.createLinearGradient(0, 0, 0, height);
-    fill.addColorStop(0, enabled ? "rgba(232,165,75,0.28)" : "rgba(107,103,95,0.16)");
-    fill.addColorStop(1, "rgba(16,17,20,0)");
+    fill.addColorStop(0, enabled ? "rgba(196,165,116,0.22)" : "rgba(138,133,124,0.12)");
+    fill.addColorStop(1, "rgba(11,12,15,0)");
     ctx.lineTo(width, height);
     ctx.lineTo(0, height);
     ctx.closePath();
@@ -91,7 +97,7 @@ export function EqGraph({
       );
       ctx.beginPath();
       ctx.arc(x, y, band.id === selectedId ? 5 : 3.5, 0, Math.PI * 2);
-      ctx.fillStyle = band.id === selectedId ? "#f3efe6" : "#e8a54b";
+      ctx.fillStyle = band.id === selectedId ? text : accent;
       ctx.fill();
     }
   }, [enabled, profile, selectedId]);

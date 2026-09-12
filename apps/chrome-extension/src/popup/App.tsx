@@ -10,6 +10,7 @@ import {
   writeSessionLock,
 } from "../shared/storage";
 import type { AudioStatus, AutoDecision, EqBand, EqProfile, FilterType, NormalizedTrack } from "../shared/types";
+import { BrandMark } from "./BrandMark";
 import { EqGraph } from "./EqGraph";
 
 function formatHz(value: number): string {
@@ -19,6 +20,12 @@ function formatHz(value: number): string {
 function formatDb(value: number): string {
   const rounded = Math.round(value * 10) / 10;
   return `${rounded > 0 ? "+" : ""}${rounded.toFixed(1)} dB`;
+}
+
+function filterLabel(type: FilterType): string {
+  if (type === "lowshelf") return "Low shelf";
+  if (type === "highshelf") return "High shelf";
+  return "Peak";
 }
 
 function richerTrack(
@@ -223,76 +230,134 @@ export function App() {
       ),
   );
 
+  const connectionClass = connected ? "good" : audioStatus?.error ? "danger" : "warn";
+  const connectionLabel = connected ? "Live" : audioStatus?.error ? "Blocked" : "Waiting";
+  const curveName = auto ? "Auto" : activePreset?.name ?? "Custom";
+
+  if (!ready) {
+    return (
+      <div className="app is-loading">
+        <header className="header">
+          <div className="brand">
+            <BrandMark />
+            <div className="brand-copy">
+              <strong>Universal EQ</strong>
+              <span>Listening layer</span>
+            </div>
+          </div>
+        </header>
+        <div className="skeleton" aria-hidden="true">
+          <div className="skel title" />
+          <div className="skel" />
+          <div className="skel graph" />
+          <div className="skel" />
+          <div className="skel" />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       <header className="header">
         <div className="brand">
-          <strong>Universal EQ</strong>
-          <span>Browser output layer</span>
+          <BrandMark />
+          <div className="brand-copy">
+            <strong>Universal EQ</strong>
+            <span>Listening layer</span>
+          </div>
         </div>
         <button
           className={enabled ? "toggle on" : "toggle"}
           onClick={() => setEnabled((value) => !value)}
           type="button"
+          aria-pressed={enabled}
         >
-          {enabled ? "Enabled" : "Bypassed"}
+          {enabled ? "On" : "Off"}
           <span className="switch" />
         </button>
       </header>
 
-      <section className="now-playing">
-        <span className="meta-source">{track?.source ?? "No tab metadata"}</span>
+      <section className={track ? "now-playing" : "now-playing empty"}>
+        <div className="now-playing-top">
+          <span className="meta-source">{track?.source ?? "No tab metadata"}</span>
+          <div className="status-row">
+            <span className={`pill ${connectionClass}`}>{connectionLabel}</span>
+            <span className={auto ? "pill good" : "pill"}>{auto ? "Auto" : "Manual"}</span>
+          </div>
+        </div>
         <h2>{track?.title ?? "Waiting for playback"}</h2>
-        <p>{track ? [track.artist, track.album].filter(Boolean).join(" · ") : "Play audio in this tab to detect a track."}</p>
+        <p className="artist">
+          {track
+            ? [track.artist, track.album].filter(Boolean).join(" · ")
+            : "Play audio in this tab to detect a track."}
+        </p>
         {auto && decision ? (
-          <p className="hint good">
-            Auto follows the song — {decision.reason}
-          </p>
+          <p className="auto-reason">Auto follows the song — {decision.reason}</p>
         ) : null}
-        <p className={connected ? "hint good" : "hint"}>
+        <p
+          className={
+            connected ? "status-copy good" : audioStatus?.error ? "status-copy danger" : "status-copy"
+          }
+        >
           {connected
-            ? `EQ connected to ${audioStatus?.attached} media element${audioStatus?.attached === 1 ? "" : "s"}.`
+            ? `Connected to ${audioStatus?.attached} media element${audioStatus?.attached === 1 ? "" : "s"}.`
             : audioStatus?.error
               ? audioStatus.error
               : "EQ is not in the audio path yet. Play the video. If sliders stop working mid-song, click the video once."}
         </p>
       </section>
 
-      <EqGraph
-        profile={profile}
-        enabled={enabled}
-        selectedId={selected.id}
-        onSelect={setSelectedId}
-      />
+      <section className="curve">
+        <div className="section-label">
+          <span>Response</span>
+          <span>{curveName}</span>
+        </div>
+        <EqGraph
+          profile={profile}
+          enabled={enabled}
+          selectedId={selected.id}
+          onSelect={setSelectedId}
+        />
+      </section>
 
-      <div className="presets">
-        <button
-          className={auto ? "chip auto active" : "chip auto"}
-          onClick={enableAuto}
-          type="button"
-        >
-          Auto
-        </button>
-        {PRESETS.map((preset) => (
+      <section>
+        <div className="section-label">
+          <span>Curve</span>
+        </div>
+        <div className="presets">
           <button
-            key={preset.id}
-            className={
-              !auto && activePreset?.id === preset.id
-                ? "chip active"
-                : auto && profile.id === preset.id
-                  ? "chip suggested"
-                  : "chip"
-            }
-            onClick={() => applyPreset(preset)}
+            className={auto ? "chip auto active" : "chip auto"}
+            onClick={enableAuto}
             type="button"
           >
-            {preset.name}
+            Auto
           </button>
-        ))}
-      </div>
+          {PRESETS.map((preset) => (
+            <button
+              key={preset.id}
+              className={
+                !auto && activePreset?.id === preset.id
+                  ? "chip active"
+                  : auto && profile.id === preset.id
+                    ? "chip suggested"
+                    : "chip"
+              }
+              onClick={() => applyPreset(preset)}
+              type="button"
+            >
+              {preset.name}
+            </button>
+          ))}
+        </div>
+      </section>
 
-      <section className="preamp">
-        <div className="slider-row">
+      <section className="sliders">
+        <div className="section-label">
+          <span>Bands</span>
+          <span>{formatHz(selected.frequency)}</span>
+        </div>
+        <div className="slider-row preamp">
           <button type="button">Preamp</button>
           <input
             type="range"
@@ -311,9 +376,6 @@ export function App() {
           />
           <output>{formatDb(profile.preamp)}</output>
         </div>
-      </section>
-
-      <section className="bands">
         {profile.bands.map((band) => (
           <div
             key={band.id}
@@ -347,10 +409,10 @@ export function App() {
         ))}
       </section>
 
-      <section className="panel band-editor">
+      <section className="band-editor">
         <div className="band-head">
           <h3>{formatHz(selected.frequency)}</h3>
-          <span className="band-meta">{selected.type}</span>
+          <span className="band-meta">{filterLabel(selected.type)}</span>
         </div>
         <div className="fields">
           <label className="field">
@@ -393,10 +455,8 @@ export function App() {
       </section>
 
       <p className="hint">
-        Auto keeps listening and retunes for verse/chorus/quiet parts. Drag any
-        slider or pick a preset to lock a manual curve — Auto will not overwrite
-        it. Rust engine: <code>cargo run -p universal-eq-api</code> on
-        127.0.0.1:8787.
+        Auto retunes as the mix changes. A slider or preset locks a manual curve.
+        Rust engine: <code>cargo run -p universal-eq-api</code> on 127.0.0.1:8787.
       </p>
     </div>
   );
