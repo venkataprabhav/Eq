@@ -1,6 +1,6 @@
 # Universal EQ API
 
-Local Rust engine that returns a **custom** 8-band EQ curve for the current track.
+Local Rust engine that returns a **custom** 15-band EQ curve for the current track.
 
 The Chrome extension Auto mode calls:
 

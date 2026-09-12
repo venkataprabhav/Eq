@@ -1,9 +1,12 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub const BAND_COUNT: usize = 8;
-pub const DEFAULT_FREQUENCIES: [f32; BAND_COUNT] =
-    [60.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0];
+pub const BAND_COUNT: usize = 15;
+/// ISO 2/3-octave points from sub to air.
+pub const DEFAULT_FREQUENCIES: [f32; BAND_COUNT] = [
+    40.0, 63.0, 100.0, 160.0, 250.0, 400.0, 630.0, 1000.0, 1600.0, 2500.0, 4000.0, 6300.0,
+    10000.0, 12500.0, 16000.0,
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

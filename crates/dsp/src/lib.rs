@@ -10,11 +10,31 @@ use eq_core::{
     TrackInfo, BAND_COUNT, DEFAULT_FREQUENCIES,
 };
 
-const ENGINE: &str = "universal-eq-rust/0.6";
+const ENGINE: &str = "universal-eq-rust/0.7";
 
-/// 60, 125, 250, 500, 1k, 2k, 4k, 8k
-const MAX_BOOST: [f32; BAND_COUNT] = [2.4, 2.0, 1.4, 2.6, 3.4, 2.8, 1.6, 0.8];
-const MAX_CUT: [f32; BAND_COUNT] = [2.2, 1.6, 1.4, 1.0, 0.8, 1.0, 2.0, 2.8];
+/// 40, 63, 100, 160, 250, 400, 630, 1k, 1.6k, 2.5k, 4k, 6.3k, 10k, 12.5k, 16k
+const I_SUB: usize = 0;
+const I_KICK: usize = 1;
+const I_BASS: usize = 2;
+const I_BODY: usize = 3;
+const I_WARM: usize = 4;
+const I_MUD: usize = 5;
+const I_NASAL: usize = 6;
+const I_WORDS: usize = 7;
+const I_PRES: usize = 8;
+const I_INTEL: usize = 9;
+const I_ATTACK: usize = 10;
+const I_HATS: usize = 11;
+const I_AIR: usize = 12;
+const I_SHEEN: usize = 13;
+const I_TOP: usize = 14;
+
+const MAX_BOOST: [f32; BAND_COUNT] = [
+    2.2, 2.4, 2.0, 1.6, 1.4, 1.2, 2.4, 3.4, 3.2, 2.8, 1.8, 1.2, 0.8, 0.4, 0.3,
+];
+const MAX_CUT: [f32; BAND_COUNT] = [
+    2.0, 2.2, 1.8, 1.4, 1.2, 1.6, 1.0, 0.8, 0.8, 1.0, 1.6, 2.2, 2.4, 2.6, 2.8,
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Lead {
@@ -47,11 +67,13 @@ pub fn recommend(request: &RecommendRequest) -> RecommendResponse {
     let mut gains = enhance(lead, mix.as_ref(), &meta, section);
     apply_device_offsets(&mut gains, request.target_offsets_db.as_ref());
     if meta.no_air_boost || mix.as_ref().is_some_and(|m| m.dark_air > 0.35) {
-        if gains[7] > 0.0 {
-            gains[7] = 0.0;
+        for i in I_AIR..=I_TOP {
+            if gains[i] > 0.0 {
+                gains[i] = 0.0;
+            }
         }
-        if gains[6] > 0.6 {
-            gains[6] = 0.6;
+        if gains[I_HATS] > 0.5 {
+            gains[I_HATS] = 0.5;
         }
     }
     clamp_gains(&mut gains);
@@ -244,13 +266,16 @@ fn enhance(
     if let Some(mix) = mix {
         tame_harshness(&mut gains, mix);
         if mix.mud > 0.35 && lead != Lead::Speech {
-            gains[2] -= 0.6 * mix.mud;
+            gains[I_MUD] -= 0.7 * mix.mud;
+            gains[I_WARM] -= 0.25 * mix.mud;
         }
     }
 
     if meta.night {
-        gains[6] -= 0.6;
-        gains[7] -= 1.2;
+        gains[I_HATS] -= 0.5;
+        gains[I_AIR] -= 1.0;
+        gains[I_SHEEN] -= 1.2;
+        gains[I_TOP] -= 1.4;
     }
 
     // Loud / crushed masters: keep the shape, just don't slam the boosts.
@@ -269,7 +294,9 @@ fn enhance(
 }
 
 fn speech_curve() -> [f32; BAND_COUNT] {
-    [-2.2, -1.4, 0.3, 1.8, 2.8, 1.6, 0.2, -1.2]
+    [
+        -2.4, -2.0, -1.2, -0.4, 0.2, 0.5, 1.6, 2.8, 2.4, 1.6, 0.4, -0.2, -1.0, -1.2, -1.4,
+    ]
 }
 
 /// Same idea as the Vocal preset: clear rumble a little, commit to words.
@@ -284,50 +311,59 @@ fn vocal_curve(mix: Option<&MixFeatures>, meta: &MetaHints, section: &str) -> [f
     let sung = mix.map(|m| m.vocal).unwrap_or(0.0);
 
     // If the vocal is already saturated in 1–2 kHz, keep the lift but lean
-    // into body (500) instead of piling more grit.
+    // into body (630) instead of piling more grit.
     let presence = 1.0 - 0.28 * grit;
     let air = (1.0 - 0.50 * hats) * (1.0 - 0.28 * snare);
 
-    let mut gains = [
-        -1.1 * v - 0.5 * boom * v,
-        -0.55 * v,
-        0.0,
-        1.6 * v + 0.4 * grit,
-        2.9 * v * presence,
-        2.3 * v * presence,
-        0.7 * v * air,
-        -0.55 * v,
-    ];
+    let mut gains = [0.0_f32; BAND_COUNT];
+    gains[I_SUB] = -0.9 * v - 0.35 * boom * v;
+    gains[I_KICK] = -1.1 * v - 0.45 * boom * v;
+    gains[I_BASS] = -0.55 * v;
+    gains[I_BODY] = -0.2 * v;
+    gains[I_WARM] = 0.05 * v;
+    gains[I_MUD] = -0.15 * v;
+    gains[I_NASAL] = 1.45 * v + 0.35 * grit;
+    gains[I_WORDS] = 2.9 * v * presence;
+    gains[I_PRES] = 2.5 * v * presence;
+    gains[I_INTEL] = 2.1 * v * presence;
+    gains[I_ATTACK] = 0.75 * v * air;
+    gains[I_HATS] = 0.1 * v * air;
+    gains[I_AIR] = -0.45 * v;
+    gains[I_SHEEN] = -0.25 * v;
+    gains[I_TOP] = 0.0;
 
     match section {
         "verse" => {
-            gains[3] += 0.25;
-            gains[4] += 0.45;
-            gains[5] += 0.55;
-            gains[0] -= 0.15;
+            gains[I_NASAL] += 0.2;
+            gains[I_WORDS] += 0.4;
+            gains[I_PRES] += 0.5;
+            gains[I_INTEL] += 0.35;
+            gains[I_KICK] -= 0.15;
         }
         "chorus" => {
             // Keep the drop. Vocal stays forward; do not scoop the production.
-            gains[0] += 0.45 * v;
-            gains[1] += 0.25 * v;
-            gains[4] += 0.20;
-            gains[5] += 0.25;
+            gains[I_SUB] += 0.4 * v;
+            gains[I_KICK] += 0.45 * v;
+            gains[I_BASS] += 0.2 * v;
+            gains[I_WORDS] += 0.15;
+            gains[I_PRES] += 0.25;
         }
         "quiet" => {
-            gains[4] += 0.55;
-            gains[5] += 0.45;
-            gains[0] -= 0.20;
+            gains[I_WORDS] += 0.5;
+            gains[I_PRES] += 0.45;
+            gains[I_INTEL] += 0.3;
+            gains[I_KICK] -= 0.15;
         }
         "groove" => {
             // Bass-heavy beat under a singer is still a vocal mix.
             // Only back off words in a true instrumental pocket.
             if sung < 0.22 && !meta.vocal {
-                gains[0] += 0.55 * v;
-                gains[4] -= 0.25;
-                gains[5] -= 0.15;
+                gains[I_KICK] += 0.5 * v;
+                gains[I_WORDS] -= 0.2;
+                gains[I_PRES] -= 0.15;
             } else {
-                gains[0] += 0.40 * v;
-                gains[1] += 0.15 * v;
+                gains[I_SUB] += 0.35 * v;
+                gains[I_KICK] += 0.35 * v;
             }
         }
         _ => {}
@@ -338,42 +374,49 @@ fn vocal_curve(mix: Option<&MixFeatures>, meta: &MetaHints, section: &str) -> [f
 
 fn bass_curve(mix: Option<&MixFeatures>) -> [f32; BAND_COUNT] {
     let boom = mix.map(|m| (0.55 + 0.45 * m.boom).clamp(0.55, 1.0)).unwrap_or(0.7);
-    [
-        1.8 * boom,
-        1.15 * boom,
-        0.15,
-        0.0,
-        0.35,
-        0.85,
-        0.35,
-        -0.2,
-    ]
+    let mut gains = [0.0_f32; BAND_COUNT];
+    gains[I_SUB] = 1.6 * boom;
+    gains[I_KICK] = 1.9 * boom;
+    gains[I_BASS] = 1.25 * boom;
+    gains[I_BODY] = 0.7 * boom;
+    gains[I_WARM] = 0.15;
+    gains[I_WORDS] = 0.3;
+    gains[I_PRES] = 0.45;
+    gains[I_INTEL] = 0.85;
+    gains[I_ATTACK] = 0.35;
+    gains[I_AIR] = -0.15;
+    gains
 }
 
 fn groove_curve(mix: Option<&MixFeatures>) -> [f32; BAND_COUNT] {
     let boom = mix.map(|m| m.boom).unwrap_or(0.25);
-    [
-        1.3 + 0.5 * boom,
-        0.8,
-        0.0,
-        0.45,
-        0.7,
-        1.35,
-        0.75,
-        0.25,
-    ]
+    let mut gains = [0.0_f32; BAND_COUNT];
+    gains[I_SUB] = 1.1 + 0.4 * boom;
+    gains[I_KICK] = 1.4 + 0.3 * boom;
+    gains[I_BASS] = 0.85;
+    gains[I_BODY] = 0.4;
+    gains[I_NASAL] = 0.35;
+    gains[I_WORDS] = 0.6;
+    gains[I_PRES] = 0.85;
+    gains[I_INTEL] = 1.3;
+    gains[I_ATTACK] = 0.8;
+    gains[I_HATS] = 0.4;
+    gains[I_AIR] = 0.15;
+    gains
 }
 
 fn tame_harshness(gains: &mut [f32; BAND_COUNT], mix: &MixFeatures) {
     if mix.hats > 0.45 {
-        gains[7] -= 1.4 * mix.hats;
+        gains[I_AIR] -= 1.3 * mix.hats;
+        gains[I_SHEEN] -= 1.1 * mix.hats;
+        gains[I_TOP] -= 0.8 * mix.hats;
         if mix.hats > 0.7 {
-            gains[6] -= 0.5 * (mix.hats - 0.7);
+            gains[I_HATS] -= 0.55 * (mix.hats - 0.7);
         }
     }
     if mix.snare > 0.75 && mix.crushed > 0.45 {
         // Only when the crack is actually painful — do not suppress a healthy snare.
-        gains[6] -= 0.6 * (mix.snare - 0.75);
+        gains[I_ATTACK] -= 0.55 * (mix.snare - 0.75);
     }
 }
 
@@ -454,7 +497,7 @@ fn build_profile(gains: &[f32; BAND_COUNT], preamp: f32) -> EqProfile {
                 _ => FilterType::Peaking,
             };
             let q = match filter_type {
-                FilterType::Peaking => (0.75 + gains[i].abs() * 0.07).clamp(0.6, 1.6),
+                FilterType::Peaking => (1.15 + gains[i].abs() * 0.06).clamp(1.0, 1.8),
                 _ => 0.7,
             };
             EqBand {
@@ -541,13 +584,15 @@ mod tests {
 
         assert_eq!(response.profile.id, "custom");
         assert_eq!(response.profile.bands.len(), BAND_COUNT);
+        assert_eq!(response.profile.bands[I_WORDS].frequency, 1000.0);
+        assert_eq!(response.profile.bands[I_INTEL].frequency, 2500.0);
         assert!(response.latency_ms < 500);
         assert!(
             response.profile.bands[0].gain > 0.4,
             "bass-led mix should get a low-end lift, got {}",
             response.profile.bands[0].gain
         );
-        assert!(response.profile.bands[7].gain < 1.0);
+        assert!(response.profile.bands[I_AIR].gain < 1.0);
         assert!(response.reason.contains("low end"));
     }
 
@@ -563,8 +608,8 @@ mod tests {
             target_offsets_db: None,
         });
 
-        assert!(response.profile.bands[4].gain > response.profile.bands[0].gain);
-        assert!(response.profile.bands[4].gain > 1.5);
+        assert!(response.profile.bands[I_WORDS].gain > response.profile.bands[I_KICK].gain);
+        assert!(response.profile.bands[I_WORDS].gain > 1.5);
         assert!(response.reason.contains("speech"));
     }
 
@@ -596,9 +641,9 @@ mod tests {
         });
 
         // Dense mix still has a vocal/mid lead — enhance it, do not scoop it.
-        assert!(response.profile.bands[4].gain > 0.8);
-        assert!(response.profile.bands[5].gain > 0.4);
-        assert!(response.profile.bands[7].gain <= 0.2);
+        assert!(response.profile.bands[I_WORDS].gain > 0.8);
+        assert!(response.profile.bands[I_PRES].gain > 0.4);
+        assert!(response.profile.bands[I_AIR].gain <= 0.2);
         assert!(response.profile.preamp < 0.0);
     }
 
@@ -627,16 +672,16 @@ mod tests {
 
         assert!(response.reason.contains("vocal"));
         assert!(
-            response.profile.bands[4].gain > 1.6,
+            response.profile.bands[I_WORDS].gain > 1.6,
             "1 kHz should commit like Vocal, got {}",
-            response.profile.bands[4].gain
+            response.profile.bands[I_WORDS].gain
         );
-        assert!(response.profile.bands[5].gain > 1.2);
-        assert!(response.profile.bands[3].gain > 0.6);
+        assert!(response.profile.bands[I_PRES].gain > 1.2);
+        assert!(response.profile.bands[I_NASAL].gain > 0.6);
         // Unmask, do not flatten the 808/kick.
-        assert!(response.profile.bands[0].gain > -2.3);
-        assert!(response.profile.bands[0].gain < 0.8);
-        assert!(response.profile.bands[6].gain > -1.2);
+        assert!(response.profile.bands[I_KICK].gain > -2.3);
+        assert!(response.profile.bands[I_KICK].gain < 0.8);
+        assert!(response.profile.bands[I_ATTACK].gain > -1.2);
     }
 
     #[test]
@@ -664,12 +709,12 @@ mod tests {
 
         assert!(response.reason.contains("vocal"));
         assert!(
-            response.profile.bands[0].gain > -2.2,
-            "must not scoop 60 Hz just because Diplo is loud, got {}",
-            response.profile.bands[0].gain
+            response.profile.bands[I_KICK].gain > -2.2,
+            "must not scoop 63 Hz just because Diplo is loud, got {}",
+            response.profile.bands[I_KICK].gain
         );
-        assert!(response.profile.bands[4].gain > 1.2);
-        assert!(response.profile.bands[5].gain > 0.8);
+        assert!(response.profile.bands[I_WORDS].gain > 1.2);
+        assert!(response.profile.bands[I_PRES].gain > 0.8);
     }
 
     #[test]

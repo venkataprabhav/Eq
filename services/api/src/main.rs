@@ -74,7 +74,7 @@ async fn recommend_handler(
     }
 
     // Cheap sanity check so the extension always gets a usable profile.
-    if response.profile.bands.len() != 8 {
+    if response.profile.bands.len() != eq_core::BAND_COUNT {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             "invalid EQ profile band count".into(),
