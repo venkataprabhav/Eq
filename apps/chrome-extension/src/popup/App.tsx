@@ -19,15 +19,18 @@ function formatHz(value: number): string {
   return value >= 1000 ? `${(value / 1000).toFixed(value >= 10000 ? 0 : 1)} kHz` : `${Math.round(value)} Hz`;
 }
 
+function formatHzShort(value: number): string {
+  if (value >= 10000) return `${Math.round(value / 1000)}k`;
+  if (value >= 1000) {
+    const kilo = value / 1000;
+    return Number.isInteger(kilo) ? `${kilo}k` : `${kilo.toFixed(1)}k`;
+  }
+  return `${Math.round(value)}`;
+}
+
 function formatDb(value: number): string {
   const rounded = Math.round(value * 10) / 10;
   return `${rounded > 0 ? "+" : ""}${rounded.toFixed(1)} dB`;
-}
-
-function filterLabel(type: FilterType): string {
-  if (type === "lowshelf") return "Low shelf";
-  if (type === "highshelf") return "High shelf";
-  return "Peak";
 }
 
 function richerTrack(
@@ -417,13 +420,15 @@ export function App() {
         </div>
       </section>
 
-      <section className="sliders">
+      <section className="bands">
         <div className="section-label">
           <span>Bands</span>
-          <span>{formatHz(selected.frequency)}</span>
+          <span>
+            {formatHz(selected.frequency)} · {formatDb(selected.gain)}
+          </span>
         </div>
         <div className="slider-row preamp">
-          <button type="button">Preamp</button>
+          <span>Preamp</span>
           <input
             type="range"
             min={-12}
@@ -441,45 +446,42 @@ export function App() {
           />
           <output>{formatDb(profile.preamp)}</output>
         </div>
-        {profile.bands.map((band) => (
-          <div
-            key={band.id}
-            className={band.id === selected.id ? "slider-row active" : "slider-row"}
-          >
-            <button type="button" onClick={() => setSelectedId(band.id)}>
-              {formatHz(band.frequency)}
-            </button>
-            <input
-              type="range"
-              min={-12}
-              max={12}
-              step={0.1}
-              value={band.gain}
-              onChange={(event) => {
-                setSelectedId(band.id);
-                updateProfile({
-                  ...profile,
-                  id: "custom",
-                  name: "Custom",
-                  bands: profile.bands.map((item) =>
-                    item.id === band.id
-                      ? { ...item, gain: Number(event.target.value) }
-                      : item,
-                  ),
-                });
-              }}
-            />
-            <output>{formatDb(band.gain)}</output>
-          </div>
-        ))}
-      </section>
-
-      <section className="band-editor">
-        <div className="band-head">
-          <h3>{formatHz(selected.frequency)}</h3>
-          <span className="band-meta">{filterLabel(selected.type)}</span>
+        <div className="eq-faders">
+          {profile.bands.map((band) => (
+            <label
+              key={band.id}
+              className={band.id === selected.id ? "eq-fader active" : "eq-fader"}
+            >
+              <output>{band.gain === 0 ? "0" : formatDb(band.gain).replace(" dB", "")}</output>
+              <input
+                type="range"
+                min={-12}
+                max={12}
+                step={0.1}
+                value={band.gain}
+                aria-label={formatHz(band.frequency)}
+                onFocus={() => setSelectedId(band.id)}
+                onChange={(event) => {
+                  setSelectedId(band.id);
+                  updateProfile({
+                    ...profile,
+                    id: "custom",
+                    name: "Custom",
+                    bands: profile.bands.map((item) =>
+                      item.id === band.id
+                        ? { ...item, gain: Number(event.target.value) }
+                        : item,
+                    ),
+                  });
+                }}
+              />
+              <button type="button" onClick={() => setSelectedId(band.id)}>
+                {formatHzShort(band.frequency)}
+              </button>
+            </label>
+          ))}
         </div>
-        <div className="fields">
+        <div className="band-inspector">
           <label className="field">
             <span>Freq</span>
             <input

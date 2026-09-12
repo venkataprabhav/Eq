@@ -1,3 +1,4 @@
+import { fetchRecommend } from "../shared/eq-api";
 import { loadAudioStatus, loadEqState, saveAudioStatus, saveTrack } from "../shared/storage";
 import type { AudioStatus, NormalizedTrack, RuntimeMessage } from "../shared/types";
 
@@ -33,6 +34,15 @@ chrome.runtime.onMessage.addListener(
     if (message.type === "AUDIO_STATUS") {
       void persistAudioStatus(message.status, sender);
       return false;
+    }
+    if (message.type === "RECOMMEND_EQ") {
+      fetchRecommend(message.track, message.spectrum)
+        .then((result) => sendResponse({ ok: true, result }))
+        .catch((error: unknown) => {
+          const text = error instanceof Error ? error.message : String(error);
+          sendResponse({ ok: false, error: text });
+        });
+      return true;
     }
     return false;
   },

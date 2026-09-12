@@ -1,123 +1,122 @@
 import { trackKey, type SpectrumBands } from "../shared/auto-eq";
 import { recommendFromRust } from "../shared/eq-api";
-import { loadEqState, saveAutoDecision, saveEqState } from "../shared/storage";
-import type { AutoDecision, EqProfile, NormalizedTrack } from "../shared/types";
-import { sampleSpectrum } from "./audio-graph";
+import { loadEqState, saveAutoApply, saveAutoDecision } from "../shared/storage";
+import type { AutoDecision, EqProfile, EqState, NormalizedTrack } from "../shared/types";
+import { applyEqToPage, sampleSpectrum } from "./audio-graph";
 
-const tickMs = 1000;
-let samples: SpectrumBands[] = [];
+const tickMs = 200;
+const persistMs = 280;
+const emaAlpha = 0.42;
+let ema: SpectrumBands | null = null;
 let lastKey = "";
 let lastApplied = "";
 let inFlight = false;
-let didEarlyRecommend = false;
 let lastRecommendAt = 0;
+let lastPersistAt = 0;
+let session: Pick<EqState, "auto" | "epoch"> | null = null;
 
-function averageSpectrum(list: SpectrumBands[]): SpectrumBands {
-  const total = list.reduce(
-    (acc, item) => ({
-      sub: acc.sub + item.sub,
-      bass: acc.bass + item.bass,
-      lowMid: acc.lowMid + item.lowMid,
-      mid: acc.mid + item.mid,
-      highMid: acc.highMid + item.highMid,
-      high: acc.high + item.high,
-      rms: acc.rms + item.rms,
-      crack: acc.crack + item.crack,
-      hats: acc.hats + item.hats,
-      air: acc.air + item.air,
-    }),
-    {
-      sub: 0,
-      bass: 0,
-      lowMid: 0,
-      mid: 0,
-      highMid: 0,
-      high: 0,
-      rms: 0,
-      crack: 0,
-      hats: 0,
-      air: 0,
-    },
-  );
-  const n = list.length || 1;
+function mixSpectrum(prev: SpectrumBands, next: SpectrumBands, amount: number): SpectrumBands {
+  const a = amount;
+  const b = 1 - amount;
   return {
-    sub: total.sub / n,
-    bass: total.bass / n,
-    lowMid: total.lowMid / n,
-    mid: total.mid / n,
-    highMid: total.highMid / n,
-    high: total.high / n,
-    rms: total.rms / n,
-    crack: total.crack / n,
-    hats: total.hats / n,
-    air: total.air / n,
+    sub: prev.sub * b + next.sub * a,
+    bass: prev.bass * b + next.bass * a,
+    lowMid: prev.lowMid * b + next.lowMid * a,
+    mid: prev.mid * b + next.mid * a,
+    highMid: prev.highMid * b + next.highMid * a,
+    high: prev.high * b + next.high * a,
+    rms: prev.rms * b + next.rms * a,
+    crack: prev.crack * b + next.crack * a,
+    hats: prev.hats * b + next.hats * a,
+    air: prev.air * b + next.air * a,
   };
 }
 
 function resetSession(): void {
-  samples = [];
+  ema = null;
   lastApplied = "";
-  didEarlyRecommend = false;
   lastRecommendAt = 0;
+  lastPersistAt = 0;
 }
 
-async function applyCustomProfile(
+export function noteAutoSession(auto: boolean, epoch: number): void {
+  session = { auto, epoch };
+  if (!auto) resetSession();
+}
+
+async function readSession(): Promise<Pick<EqState, "auto" | "epoch">> {
+  if (session) return session;
+  const state = await loadEqState();
+  session = { auto: state.auto, epoch: state.epoch };
+  return session;
+}
+
+function applyNow(profile: EqProfile, epoch: number): void {
+  applyEqToPage({
+    enabled: true,
+    auto: true,
+    profile,
+    epoch,
+  });
+}
+
+async function persistAuto(
   track: NormalizedTrack | null,
   profile: EqProfile,
   reason: string,
   engine: string,
-  latencyMs: number,
-  startedEpoch: number,
+  tookMs: number,
 ): Promise<void> {
-  const key = trackKey(track);
-  const fingerprint = `${key}::${profile.preamp}::${profile.bands
-    .map((b) => `${b.gain}:${b.q}`)
-    .join(",")}`;
-  if (fingerprint === lastApplied) return;
-
-  const state = await loadEqState();
-  if (!state.auto) return;
-  if (state.epoch !== startedEpoch) return;
-
-  lastApplied = fingerprint;
-  await saveEqState({
-    enabled: true,
-    auto: state.auto,
-    profile: {
+  const decision: AutoDecision = {
+    category: "custom",
+    presetId: "custom",
+    reason: `${reason} (${engine}, ${tookMs}ms)`,
+    trackKey: trackKey(track),
+  };
+  await saveAutoApply(
+    {
       ...profile,
       id: "custom",
       name: "Custom Auto",
       bands: profile.bands.map((band) => ({ ...band })),
     },
-    epoch: state.epoch,
-  });
-
-  const decision: AutoDecision = {
-    category: "custom",
-    presetId: "custom",
-    reason: `${reason} (${engine}, ${latencyMs}ms)`,
-    trackKey: key,
-  };
-  await saveAutoDecision(decision);
+    decision,
+  );
 }
 
 async function requestRecommend(
   track: NormalizedTrack | null,
-  spectrum: SpectrumBands | null,
+  spectrum: SpectrumBands,
   startedEpoch: number,
 ): Promise<void> {
   if (inFlight) return;
   inFlight = true;
+  const started = performance.now();
   try {
     const result = await recommendFromRust(track, spectrum);
-    await applyCustomProfile(
-      track,
-      result.profile,
-      result.reason,
-      result.engine,
-      result.latency_ms,
-      startedEpoch,
-    );
+    const current = await readSession();
+    if (!current.auto || current.epoch !== startedEpoch) return;
+
+    const profile = {
+      ...result.profile,
+      id: "custom",
+      name: "Custom Auto",
+      bands: result.profile.bands.map((band) => ({ ...band })),
+    };
+    const fingerprint = `${trackKey(track)}::${profile.preamp}::${profile.bands
+      .map((band) => `${band.gain}:${band.q}`)
+      .join(",")}`;
+    if (fingerprint === lastApplied) return;
+
+    lastApplied = fingerprint;
+    applyNow(profile, startedEpoch);
+
+    const tookMs = Math.max(result.latency_ms, Math.round(performance.now() - started));
+    const now = Date.now();
+    if (lastPersistAt === 0 || now - lastPersistAt >= persistMs) {
+      lastPersistAt = now;
+      await persistAuto(track, profile, result.reason, result.engine, tookMs);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await saveAutoDecision({
@@ -132,8 +131,8 @@ async function requestRecommend(
 }
 
 export async function runAutoEq(track: NormalizedTrack | null): Promise<void> {
-  const state = await loadEqState();
-  if (!state.auto) {
+  const current = await readSession();
+  if (!current.auto) {
     resetSession();
     return;
   }
@@ -145,17 +144,14 @@ export async function runAutoEq(track: NormalizedTrack | null): Promise<void> {
   }
 
   const snapshot = sampleSpectrum();
-  if (snapshot && snapshot.rms >= 8) {
-    samples.push(snapshot);
-    if (samples.length > 4) samples.shift();
-  }
+  if (!snapshot || snapshot.rms < 8) return;
 
-  if (inFlight || samples.length < 2) return;
+  ema = ema ? mixSpectrum(ema, snapshot, emaAlpha) : snapshot;
 
   const now = Date.now();
-  if (didEarlyRecommend && now - lastRecommendAt < tickMs) return;
+  if (lastRecommendAt !== 0 && now - lastRecommendAt < tickMs) return;
+  if (inFlight) return;
 
-  didEarlyRecommend = true;
   lastRecommendAt = now;
-  await requestRecommend(track, averageSpectrum(samples), state.epoch);
+  await requestRecommend(track, ema, current.epoch);
 }

@@ -67,10 +67,10 @@ html,
 body,
 #root {
   margin: 0;
-  min-width: 320px;
-  width: 400px;
+  min-width: 360px;
+  width: 440px;
   max-width: 100vw;
-  min-height: 560px;
+  min-height: 0;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font);
@@ -98,13 +98,13 @@ select:focus-visible {
 .app {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 14px;
   padding: 16px 16px 18px;
   animation: rise 280ms var(--ease);
 }
 
 .app.is-loading {
-  min-height: 560px;
+  min-height: 420px;
 }
 
 @keyframes rise {
@@ -452,42 +452,87 @@ select:focus-visible {
   background: var(--accent-soft);
 }
 
-.sliders {
+.bands {
   display: grid;
-  gap: 4px;
+  gap: 10px;
 }
 
 .slider-row {
   display: grid;
-  grid-template-columns: 72px 1fr 48px;
+  grid-template-columns: 56px 1fr 52px;
   gap: 10px;
   align-items: center;
-  padding: 4px 6px;
-  margin: 0 -6px;
-  border-radius: 9px;
-  transition: background 140ms var(--ease);
 }
 
-.slider-row:hover,
-.slider-row.active {
-  background: var(--surface);
+.slider-row > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-family: var(--font-mono);
 }
 
-.slider-row button {
+.eq-faders {
+  display: grid;
+  grid-template-columns: repeat(15, minmax(0, 1fr));
+  gap: 2px;
+  padding: 8px 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+}
+
+.eq-fader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 4px 0 2px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.eq-fader:hover,
+.eq-fader.active {
+  background: var(--accent-soft);
+}
+
+.eq-fader output {
+  width: 100%;
+  text-align: center;
+  font-size: 9px;
+  line-height: 1;
+}
+
+.eq-fader button {
   border: 0;
   background: transparent;
   color: var(--muted);
-  text-align: left;
   padding: 0;
   cursor: pointer;
-  font-size: 11px;
+  font-size: 9px;
   font-family: var(--font-mono);
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
+  line-height: 1.1;
 }
 
-.slider-row.active button,
-.slider-row.active output {
+.eq-fader.active output,
+.eq-fader.active button {
   color: var(--accent);
+}
+
+.eq-fader input[type="range"] {
+  width: 16px;
+  height: 118px;
+  padding: 0;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  appearance: slider-vertical;
+}
+
+.band-inspector {
+  display: grid;
+  grid-template-columns: 1fr 0.8fr 1.2fr;
+  gap: 8px;
 }
 
 input[type="range"] {
@@ -521,7 +566,11 @@ input[type="range"]:hover::-webkit-slider-thumb {
   transform: scale(1.08);
 }
 
-.slider-row.active input[type="range"]::-webkit-slider-runnable-track,
+.preamp input[type="range"]::-webkit-slider-runnable-track,
+.eq-fader.active input[type="range"]::-webkit-slider-runnable-track {
+  background: linear-gradient(180deg, var(--accent), var(--accent-soft));
+}
+
 .preamp input[type="range"]::-webkit-slider-runnable-track {
   background: linear-gradient(90deg, var(--accent-soft), var(--accent));
 }
@@ -549,37 +598,6 @@ output {
   font-variant-numeric: tabular-nums;
 }
 
-.band-editor {
-  display: grid;
-  gap: 12px;
-  padding-top: 4px;
-  border-top: 1px solid var(--line);
-}
-
-.band-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-}
-
-.band-head h3 {
-  margin: 0;
-  font-size: 14px;
-  font-weight: 620;
-  letter-spacing: -0.02em;
-}
-
-.band-meta {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.fields {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1.15fr;
-  gap: 8px;
-}
-
 .field {
   display: grid;
   gap: 5px;
@@ -600,7 +618,7 @@ output {
   background: var(--bg-elevated);
   color: var(--text);
   border-radius: var(--radius-sm);
-  padding: 8px 9px;
+  padding: 6px 8px;
   transition:
     border-color 160ms var(--ease),
     background 160ms var(--ease);
@@ -672,17 +690,16 @@ output {
     font-size: 16px;
   }
 
-  .fields {
+  .band-inspector {
     grid-template-columns: 1fr 1fr;
   }
 
-  .field:last-child {
+  .band-inspector .field:last-child {
     grid-column: 1 / -1;
   }
 
-  .slider-row {
-    grid-template-columns: 62px 1fr 44px;
-    gap: 8px;
+  .eq-fader input[type="range"] {
+    height: 100px;
   }
 }
 
@@ -690,10 +707,10 @@ output {
   html,
   body,
   #root {
-    width: min(520px, 100vw);
+    width: min(480px, 100vw);
   }
 
   .graph {
-    height: 180px;
+    height: 168px;
   }
 }

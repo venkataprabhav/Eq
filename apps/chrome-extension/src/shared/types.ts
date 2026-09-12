@@ -1,5 +1,10 @@
 export type FilterType = "peaking" | "lowshelf" | "highshelf";
 
+export const EQ_BAND_COUNT = 15;
+export const EQ_FREQUENCIES = [
+  40, 63, 100, 160, 250, 400, 630, 1000, 1600, 2500, 4000, 6300, 10000, 12500, 16000,
+] as const;
+
 export type ThemeMode = "dark" | "light";
 
 export interface EqBand {
@@ -50,12 +55,26 @@ export interface AudioStatus {
   pageUrl?: string;
 }
 
+export interface SpectrumSnapshot {
+  sub: number;
+  bass: number;
+  lowMid: number;
+  mid: number;
+  highMid: number;
+  high: number;
+  rms: number;
+  crack: number;
+  hats: number;
+  air: number;
+}
+
 export type RuntimeMessage =
   | { type: "TRACK_UPDATED"; track: NormalizedTrack | null }
   | { type: "GET_TRACK" }
   | { type: "TRACK_RESPONSE"; track: NormalizedTrack | null }
   | { type: "AUDIO_STATUS"; status: AudioStatus }
-  | { type: "APPLY_EQ" };
+  | { type: "APPLY_EQ" }
+  | { type: "RECOMMEND_EQ"; track: NormalizedTrack | null; spectrum: SpectrumSnapshot | null };
 
 export const STORAGE_KEYS = {
   enabled: "enabled",

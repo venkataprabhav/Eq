@@ -1,5 +1,6 @@
 import type { SpectrumBands } from "../shared/auto-eq";
 import type { AudioStatus, EqState } from "../shared/types";
+import { EQ_BAND_COUNT } from "../shared/types";
 
 interface AttachedGraph {
   element: HTMLMediaElement;
@@ -44,11 +45,11 @@ function createGraph(element: HTMLMediaElement): AttachedGraph | null {
     const context = new AudioContext({ latencyHint: "interactive" });
     const source = context.createMediaElementSource(element);
     const preamp = context.createGain();
-    const filters = Array.from({ length: 8 }, () => context.createBiquadFilter());
+    const filters = Array.from({ length: EQ_BAND_COUNT }, () => context.createBiquadFilter());
     const limiter = context.createDynamicsCompressor();
     const analyser = context.createAnalyser();
     analyser.fftSize = 2048;
-    analyser.smoothingTimeConstant = 0.82;
+    analyser.smoothingTimeConstant = 0.45;
 
     limiter.threshold.value = -1;
     limiter.knee.value = 0;
@@ -84,7 +85,7 @@ function createGraph(element: HTMLMediaElement): AttachedGraph | null {
 function applyProfileToGraph(graph: AttachedGraph, state: EqState): void {
   const { enabled, profile, auto } = state;
   const now = graph.context.currentTime;
-  const tau = auto ? 0.12 : 0.015;
+  const tau = auto ? 0.055 : 0.015;
   const preamp = enabled ? 10 ** (profile.preamp / 20) : 1;
 
   graph.preamp.gain.cancelScheduledValues(now);

@@ -1,13 +1,15 @@
 import { extensionAlive } from "../shared/runtime";
 import { loadEqState, saveTrack } from "../shared/storage";
-import type { RuntimeMessage } from "../shared/types";
+import type { EqState, RuntimeMessage } from "../shared/types";
 import { applyEqToPage, resumeGraphs, watchMedia } from "./audio-graph";
-import { runAutoEq } from "./auto-eq-runner";
+import { noteAutoSession, runAutoEq } from "./auto-eq-runner";
 import { readTrack, tracksEqual } from "./metadata";
 
 let lastTrack: ReturnType<typeof readTrack> = null;
 let pollId = 0;
 let stopWatch = () => undefined;
+let cachedState: EqState | null = null;
+let lastStatusAt = 0;
 
 function alive(): boolean {
   if (extensionAlive()) return true;
@@ -16,11 +18,38 @@ function alive(): boolean {
   return false;
 }
 
-async function syncEq(): Promise<void> {
+async function ensureState(): Promise<EqState | null> {
+  if (cachedState) return cachedState;
+  cachedState = await loadEqState();
+  noteAutoSession(cachedState.auto, cachedState.epoch);
+  return cachedState;
+}
+
+function patchCachedState(changes: { [key: string]: chrome.storage.StorageChange }): void {
+  if (!cachedState) return;
+  if (typeof changes.enabled?.newValue === "boolean") {
+    cachedState.enabled = changes.enabled.newValue;
+  }
+  if (typeof changes.auto?.newValue === "boolean") {
+    cachedState.auto = changes.auto.newValue;
+  }
+  if (typeof changes.epoch?.newValue === "number") {
+    cachedState.epoch = changes.epoch.newValue;
+  }
+  if (changes.profile?.newValue) {
+    cachedState.profile = changes.profile.newValue as EqState["profile"];
+  }
+  noteAutoSession(cachedState.auto, cachedState.epoch);
+}
+
+async function syncEq(forceStatus = false): Promise<void> {
   if (!alive()) return;
-  const state = await loadEqState();
-  if (!alive()) return;
+  const state = await ensureState();
+  if (!alive() || !state) return;
   const status = applyEqToPage(state);
+  const now = Date.now();
+  if (!forceStatus && now - lastStatusAt < 1200) return;
+  lastStatusAt = now;
   try {
     await chrome.runtime.sendMessage({
       type: "AUDIO_STATUS",
@@ -48,11 +77,12 @@ function publishTrack(): void {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (!alive()) return;
   if (area !== "local") return;
+  patchCachedState(changes);
   if (changes.enabled || changes.profile) {
     resumeGraphs();
     void syncEq();
   }
-  if (changes.auto) {
+  if (changes.auto || changes.epoch) {
     void runAutoEq(readTrack());
   }
 });
@@ -65,13 +95,13 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, _sender, sendResp
   }
   if (message.type === "APPLY_EQ") {
     resumeGraphs();
-    void syncEq().then(() => sendResponse({ ok: true }));
+    void syncEq(true).then(() => sendResponse({ ok: true }));
     return true;
   }
   return false;
 });
 
-void syncEq();
+void syncEq(true);
 publishTrack();
 stopWatch = watchMedia(() => {
   void syncEq();
@@ -82,7 +112,7 @@ pollId = window.setInterval(() => {
   void syncEq();
   publishTrack();
   void runAutoEq(readTrack());
-}, 400);
+}, 180);
 
 const mediaEvents = [
   "play",
@@ -110,7 +140,7 @@ for (const eventName of ["yt-navigate-finish", "yt-page-data-updated"]) {
     window.setTimeout(() => {
       void syncEq();
       publishTrack();
-    }, 250);
+    }, 120);
   });
 }
 

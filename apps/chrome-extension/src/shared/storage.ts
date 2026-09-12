@@ -1,4 +1,4 @@
-import { DEFAULT_PROFILE, cloneProfile } from "./presets";
+import { DEFAULT_PROFILE, cloneProfile, normalizeProfileBands } from "./presets";
 import { extensionAlive, isContextInvalidated } from "./runtime";
 import type { AudioStatus, AutoDecision, EqProfile, EqState, NormalizedTrack, ThemeMode } from "./types";
 import { STORAGE_KEYS } from "./types";
@@ -53,7 +53,7 @@ export async function loadEqState(): Promise<EqState> {
         ? stored[STORAGE_KEYS.auto]
         : false;
     const profile = isProfile(stored[STORAGE_KEYS.profile])
-      ? cloneProfile(stored[STORAGE_KEYS.profile])
+      ? normalizeProfileBands(cloneProfile(stored[STORAGE_KEYS.profile]))
       : cloneProfile(DEFAULT_PROFILE);
     const epoch =
       typeof stored[STORAGE_KEYS.epoch] === "number" ? stored[STORAGE_KEYS.epoch] : 0;
@@ -75,6 +75,20 @@ export async function saveEqState(state: EqState): Promise<void> {
       [STORAGE_KEYS.auto]: stale ? current.auto : state.auto,
       [STORAGE_KEYS.profile]: stale ? current.profile : state.profile,
       [STORAGE_KEYS.epoch]: epoch,
+    });
+  } catch (error) {
+    if (!isContextInvalidated(error)) throw error;
+  }
+}
+
+/** Persist an Auto curve without a storage round-trip read. */
+export async function saveAutoApply(profile: EqProfile, decision: AutoDecision): Promise<void> {
+  if (!extensionAlive()) return;
+  try {
+    await chrome.storage.local.set({
+      [STORAGE_KEYS.enabled]: true,
+      [STORAGE_KEYS.profile]: profile,
+      [STORAGE_KEYS.autoDecision]: decision,
     });
   } catch (error) {
     if (!isContextInvalidated(error)) throw error;
