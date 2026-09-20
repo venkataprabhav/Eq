@@ -9,7 +9,7 @@ Tick items in [PROGRESS.md](PROGRESS.md). The bars below are generated from thos
 <!-- progress-bars:start -->
 | Platform | Progress |
 | --- | --- |
-| [Chrome extension](PROGRESS.md#chrome-extension) | ![](docs/progress/chrome.svg) `█████████████░░░░░░░` **63%** (15/24) |
+| [Chrome extension](PROGRESS.md#chrome-extension) | ![](docs/progress/chrome.svg) `█████████████░░░░░░░` **67%** (16/24) |
 | [Desktop app](PROGRESS.md#desktop-app) | ![](docs/progress/desktop.svg) `░░░░░░░░░░░░░░░░░░░░` **0%** (0/19) |
 | [Android](PROGRESS.md#android) | ![](docs/progress/android.svg) `░░░░░░░░░░░░░░░░░░░░` **0%** (0/12) |
 | [iOS](PROGRESS.md#ios) | ![](docs/progress/ios.svg) `░░░░░░░░░░░░░░░░░░░░` **0%** (0/12) |

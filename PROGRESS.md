@@ -32,7 +32,7 @@ Browser companion. Applies EQ to `audio` / `video` in the page via the Web Audio
 - [x] Light / dark theme
 - [ ] Capture players that already own the audio graph (Spotify Web, etc.)
 - [ ] Cross-origin iframe EQ
-- [ ] Headphone / speaker correction in the popup
+- [x] Headphone / speaker correction in the popup
 - [ ] Smooth curve transitions (no zipper noise)
 - [ ] Auto without a local API (bundled WASM)
 - [ ] Extra site adapters (Tidal, Deezer, Apple Music web)
