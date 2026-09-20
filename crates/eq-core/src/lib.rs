@@ -95,7 +95,121 @@ impl Default for SpectrumBands {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceClass {
+    #[default]
+    Unknown,
+    Speakers,
+    Headphones,
+    Headset,
+    Hdmi,
+    BluetoothHeadphones,
+    BluetoothSpeaker,
+    BluetoothHeadset,
+}
+
+impl DeviceClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Speakers => "speakers",
+            Self::Headphones => "headphones",
+            Self::Headset => "headset",
+            Self::Hdmi => "hdmi",
+            Self::BluetoothHeadphones => "bluetooth_headphones",
+            Self::BluetoothSpeaker => "bluetooth_speaker",
+            Self::BluetoothHeadset => "bluetooth_headset",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unknown => "output",
+            Self::Speakers => "speakers",
+            Self::Headphones => "headphones",
+            Self::Headset => "headset",
+            Self::Hdmi => "display speakers",
+            Self::BluetoothHeadphones => "bluetooth headphones",
+            Self::BluetoothSpeaker => "bluetooth speaker",
+            Self::BluetoothHeadset => "bluetooth headset",
+        }
+    }
+
+    pub fn is_bluetooth(self) -> bool {
+        matches!(
+            self,
+            Self::BluetoothHeadphones | Self::BluetoothSpeaker | Self::BluetoothHeadset
+        )
+    }
+
+    /// WASAPI form factors: 1 speakers, 3 headphones, 5 headset, 9 HDMI.
+    pub fn classify(enumerator: &str, form_factor: u32, name: &str, interface: &str) -> Self {
+        let blob = format!("{enumerator} {name} {interface}").to_ascii_lowercase();
+        let bluetooth = enumerator.eq_ignore_ascii_case("BTHENUM")
+            || enumerator.eq_ignore_ascii_case("BTHHFENUM")
+            || blob.contains("bthenum")
+            || blob.contains("bluetooth")
+            || blob.contains("a2dp")
+            || blob.contains("hands-free")
+            || blob.contains("handsfree");
+        let speaker_product = SPEAKER_PRODUCTS
+            .iter()
+            .any(|needle| blob.contains(needle));
+
+        if bluetooth {
+            if form_factor == 5 || blob.contains("hands-free") || blob.contains("handsfree") {
+                return Self::BluetoothHeadset;
+            }
+            if form_factor == 1 || speaker_product {
+                return Self::BluetoothSpeaker;
+            }
+            return Self::BluetoothHeadphones;
+        }
+
+        match form_factor {
+            3 => Self::Headphones,
+            4 | 5 | 6 => Self::Headset,
+            9 => Self::Hdmi,
+            1 => Self::Speakers,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+const SPEAKER_PRODUCTS: &[&str] = &[
+    "charge",
+    "flip ",
+    "flip5",
+    "flip 5",
+    "flip6",
+    "flip 6",
+    "boom",
+    "partybox",
+    "soundbar",
+    "srs-xb",
+    "srs xb",
+    "xb13",
+    "xb23",
+    "xb33",
+    "xb43",
+    "clip ",
+    "minirig",
+    "ue boom",
+    "wonderboom",
+];
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct OutputDeviceHint {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub class: DeviceClass,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct RecommendRequest {
     #[serde(default)]
     pub track: Option<TrackInfo>,
@@ -104,6 +218,9 @@ pub struct RecommendRequest {
     /// Optional headphone / speaker target offset in dB per band.
     #[serde(default)]
     pub target_offsets_db: Option<[f32; BAND_COUNT]>,
+    /// Active playback device. Auto uses this for Bluetooth / speaker compensation.
+    #[serde(default)]
+    pub device: Option<OutputDeviceHint>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -157,12 +274,54 @@ impl EqProfile {
 
 pub fn track_key(track: &Option<TrackInfo>) -> String {
     match track {
-        Some(t) =>         format!(
+        Some(t) => format!(
             "{} | {} | {}",
             t.source.to_lowercase(),
             t.artist.to_lowercase(),
             t.title.to_lowercase()
         ),
         None => String::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DeviceClass;
+
+    #[test]
+    fn classifies_sony_headphones_as_bluetooth() {
+        let class = DeviceClass::classify("BTHENUM", 3, "Headphones", "WH-1000XM6");
+        assert_eq!(class, DeviceClass::BluetoothHeadphones);
+        assert!(class.is_bluetooth());
+    }
+
+    #[test]
+    fn classifies_jbl_charge_as_bluetooth_speaker() {
+        let class = DeviceClass::classify("BTHENUM", 1, "Speakers", "srihaas' JBL Charge 6");
+        assert_eq!(class, DeviceClass::BluetoothSpeaker);
+    }
+
+    #[test]
+    fn classifies_srs_xb_as_bluetooth_speaker() {
+        let class = DeviceClass::classify("BTHENUM", 1, "Speakers", "SRS-XB23");
+        assert_eq!(class, DeviceClass::BluetoothSpeaker);
+    }
+
+    #[test]
+    fn classifies_hdmi_monitor() {
+        let class = DeviceClass::classify("HDAUDIO", 9, "LG ULTRAGEAR", "NVIDIA High Definition Audio");
+        assert_eq!(class, DeviceClass::Hdmi);
+        assert!(!class.is_bluetooth());
+    }
+
+    #[test]
+    fn skips_calling_hands_free_as_music_headphones() {
+        let class = DeviceClass::classify(
+            "INTELAUDIO",
+            5,
+            "Headset",
+            "Srihaas's Buds4 Pro Hands-Free",
+        );
+        assert_eq!(class, DeviceClass::BluetoothHeadset);
     }
 }
