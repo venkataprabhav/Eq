@@ -6,11 +6,11 @@
 //! the section (verse / chorus / quiet / groove) about once a second.
 
 use eq_core::{
-    track_key, EqBand, EqProfile, FilterType, RecommendRequest, RecommendResponse, SpectrumBands,
-    TrackInfo, BAND_COUNT, DEFAULT_FREQUENCIES,
+    track_key, DeviceClass, EqBand, EqProfile, FilterType, RecommendRequest, RecommendResponse,
+    SpectrumBands, TrackInfo, BAND_COUNT, DEFAULT_FREQUENCIES,
 };
 
-const ENGINE: &str = "universal-eq-rust/1.2";
+const ENGINE: &str = "universal-eq-rust/1.3";
 
 /// 40, 63, 100, 160, 250, 400, 630, 1k, 1.6k, 2.5k, 4k, 6.3k, 10k, 12.5k, 16k
 const I_SUB: usize = 0;
@@ -65,6 +65,7 @@ pub fn recommend(request: &RecommendRequest) -> RecommendResponse {
     let lead = pick_lead(&meta, mix.as_ref());
 
     let mut gains = enhance(lead, mix.as_ref(), &meta, section);
+    apply_device_class(&mut gains, request.device.as_ref().map(|device| device.class));
     apply_device_offsets(&mut gains, request.target_offsets_db.as_ref());
     // Only flatten true air on explicit night/lofi listening — YouTube
     // always looks "dark" at 12 kHz and must not mute snare / vocal air.
@@ -80,7 +81,15 @@ pub fn recommend(request: &RecommendRequest) -> RecommendResponse {
 
     let preamp = compute_preamp(&gains, &meta, mix.as_ref(), section);
     let profile = build_profile(&gains, preamp);
-    let reason = explain(track, spectrum, &gains, &meta, section, lead);
+    let reason = explain(
+        track,
+        spectrum,
+        &gains,
+        &meta,
+        section,
+        lead,
+        request.device.as_ref(),
+    );
 
     RecommendResponse {
         profile,
@@ -471,6 +480,44 @@ fn apply_device_offsets(gains: &mut [f32; BAND_COUNT], offsets: Option<&[f32; BA
     }
 }
 
+/// Compensate for the playback device. Bluetooth speakers cannot play sub
+/// and already shout mids; Bluetooth headphones roll off air and often
+/// overdo bass. HDMI / laptop speakers are thin.
+fn apply_device_class(gains: &mut [f32; BAND_COUNT], class: Option<DeviceClass>) {
+    let Some(class) = class else {
+        return;
+    };
+    if class == DeviceClass::Unknown {
+        return;
+    }
+    let offsets = device_class_offsets(class);
+    for i in 0..BAND_COUNT {
+        gains[i] += offsets[i];
+    }
+}
+
+fn device_class_offsets(class: DeviceClass) -> [f32; BAND_COUNT] {
+    // 40  63   100  160  250  400  630  1k   1.6k 2.5k 4k   6.3k 10k  12.5 16k
+    match class {
+        DeviceClass::BluetoothSpeaker => [
+            -0.8, 0.6, 1.0, 0.5, -0.2, -1.1, -0.8, -0.3, 0.4, 0.7, 0.5, 0.2, 0.0, -0.3, -0.8,
+        ],
+        DeviceClass::BluetoothHeadphones => [
+            -0.3, -0.5, -0.2, 0.0, 0.2, -0.3, 0.0, 0.3, 0.5, 0.7, 0.5, 0.5, 0.6, 0.2, -0.4,
+        ],
+        DeviceClass::BluetoothHeadset => [
+            -1.2, -0.4, 0.4, 0.6, 0.3, -0.6, 0.2, 1.0, 1.2, 1.0, 0.4, 0.0, -0.4, -0.8, -1.2,
+        ],
+        DeviceClass::Hdmi | DeviceClass::Speakers => [
+            0.8, 1.1, 0.9, 0.4, 0.1, -0.4, -0.2, 0.2, 0.4, 0.5, 0.3, 0.2, 0.0, -0.2, -0.4,
+        ],
+        DeviceClass::Headphones | DeviceClass::Headset => [
+            0.0, -0.1, 0.0, 0.1, 0.1, -0.2, 0.0, 0.2, 0.3, 0.4, 0.3, 0.2, 0.2, 0.1, 0.0,
+        ],
+        DeviceClass::Unknown => [0.0; BAND_COUNT],
+    }
+}
+
 fn detect_section(spectrum: Option<&SpectrumBands>) -> &'static str {
     let Some(s) = spectrum else {
         return "intro";
@@ -567,6 +614,7 @@ fn explain(
     meta: &MetaHints,
     section: &str,
     lead: Lead,
+    device: Option<&eq_core::OutputDeviceHint>,
 ) -> String {
     let title = track
         .map(|t| t.title.as_str())
@@ -592,10 +640,24 @@ fn explain(
     let g = gains[max_i];
     let action = if g >= 0.0 { "lift" } else { "cut" };
 
-    format!(
+    let mut text = format!(
         "enhancing {lead} in the {section} of {title} ({source}) — strongest {action} near {freq:.0} Hz ({g:+.1} dB).",
         lead = lead.as_str()
-    )
+    );
+    if let Some(device) = device {
+        if device.class != DeviceClass::Unknown {
+            let name = device.name.trim();
+            if name.is_empty() {
+                text.push_str(&format!(" Tuned for {}.", device.class.label()));
+            } else {
+                text.push_str(&format!(
+                    " Tuned for {} ({name}).",
+                    device.class.label()
+                ));
+            }
+        }
+    }
+    text
 }
 
 #[cfg(test)]
@@ -622,6 +684,7 @@ mod tests {
                 ..Default::default()
             }),
             target_offsets_db: None,
+            device: None,
         });
 
         assert_eq!(response.profile.id, "custom");
@@ -648,6 +711,7 @@ mod tests {
             }),
             spectrum: None,
             target_offsets_db: None,
+            device: None,
         });
 
         assert!(response.profile.bands[I_WORDS].gain > response.profile.bands[I_KICK].gain);
@@ -680,6 +744,7 @@ mod tests {
             }),
             spectrum: Some(crushed_hot_top_spectrum()),
             target_offsets_db: None,
+            device: None,
         });
 
         // Dense mix still has a vocal/mid lead — enhance it, do not scoop it.
@@ -711,6 +776,7 @@ mod tests {
                 air: 18.0,
             }),
             target_offsets_db: None,
+            device: None,
         });
 
         assert!(response.reason.contains("vocal"));
@@ -750,6 +816,7 @@ mod tests {
                 air: 16.0,
             }),
             target_offsets_db: None,
+            device: None,
         });
 
         assert!(response.reason.contains("vocal"));
@@ -783,6 +850,7 @@ mod tests {
                 air: 14.0,
             }),
             target_offsets_db: None,
+            device: None,
         });
 
         assert!(response.reason.contains("vocal"));
@@ -834,6 +902,7 @@ mod tests {
                 air: 16.0,
             }),
             target_offsets_db: None,
+            device: None,
         });
 
         assert!(!response.reason.contains("night"));
@@ -882,6 +951,7 @@ mod tests {
                 air: 12.0,
             }),
             target_offsets_db: None,
+            device: None,
         });
 
         assert!(
@@ -905,6 +975,7 @@ mod tests {
             }),
             spectrum: Some(spectrum.clone()),
             target_offsets_db: None,
+            device: None,
         });
         let b = recommend(&RecommendRequest {
             track: Some(TrackInfo {
@@ -914,11 +985,83 @@ mod tests {
             }),
             spectrum: Some(spectrum),
             target_offsets_db: None,
+            device: None,
         });
 
         for i in 0..BAND_COUNT {
             let delta = (a.profile.bands[i].gain - b.profile.bands[i].gain).abs();
             assert!(delta < 0.15, "band {i} differed by {delta}");
         }
+    }
+
+    fn vocal_spectrum() -> SpectrumBands {
+        SpectrumBands {
+            sub: 72.0,
+            bass: 74.0,
+            low_mid: 66.0,
+            mid: 80.0,
+            high_mid: 72.0,
+            high: 36.0,
+            rms: 70.0,
+            crack: 58.0,
+            hats: 40.0,
+            air: 18.0,
+        }
+    }
+
+    fn vocal_request(device: Option<eq_core::OutputDeviceHint>) -> RecommendRequest {
+        RecommendRequest {
+            track: Some(TrackInfo {
+                title: "Genius ft. Sia, Diplo, Labrinth".into(),
+                artist: "LSD".into(),
+                ..Default::default()
+            }),
+            spectrum: Some(vocal_spectrum()),
+            target_offsets_db: None,
+            device,
+        }
+    }
+
+    #[test]
+    fn bluetooth_speaker_cuts_boxy_mids_and_does_not_boost_sub() {
+        let wired = recommend(&vocal_request(None));
+        let bluetooth = recommend(&vocal_request(Some(eq_core::OutputDeviceHint {
+            id: "bt-speaker".into(),
+            name: "JBL Charge 6".into(),
+            class: DeviceClass::BluetoothSpeaker,
+        })));
+        assert!(bluetooth.reason.contains("bluetooth speaker"));
+        assert!(bluetooth.reason.contains("JBL Charge 6"));
+        assert!(
+            bluetooth.profile.bands[I_SUB].gain < wired.profile.bands[I_SUB].gain,
+            "BT speakers should not get extra sub, wired {} bt {}",
+            wired.profile.bands[I_SUB].gain,
+            bluetooth.profile.bands[I_SUB].gain
+        );
+        assert!(
+            bluetooth.profile.bands[I_MUD].gain < wired.profile.bands[I_MUD].gain,
+            "BT speakers are already mid-forward"
+        );
+    }
+
+    #[test]
+    fn bluetooth_headphones_open_presence_and_name_the_device() {
+        let wired = recommend(&vocal_request(None));
+        let bluetooth = recommend(&vocal_request(Some(eq_core::OutputDeviceHint {
+            id: "xm6".into(),
+            name: "WH-1000XM6".into(),
+            class: DeviceClass::BluetoothHeadphones,
+        })));
+        assert!(bluetooth.reason.contains("bluetooth headphones"));
+        assert!(bluetooth.reason.contains("WH-1000XM6"));
+        assert!(
+            bluetooth.profile.bands[I_KICK].gain < wired.profile.bands[I_KICK].gain,
+            "BT headphones often already have extra bass"
+        );
+        assert!(
+            bluetooth.profile.bands[I_TOP].gain <= wired.profile.bands[I_TOP].gain,
+            "16 kHz is outside most Bluetooth codecs"
+        );
+        assert!(bluetooth.profile.bands[I_PRES].gain >= wired.profile.bands[I_PRES].gain);
     }
 }
