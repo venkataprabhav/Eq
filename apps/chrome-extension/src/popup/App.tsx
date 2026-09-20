@@ -1,17 +1,39 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { fetchDevices } from "../shared/eq-api";
+import {
+  deviceClassLabel,
+  matchSink,
+  resolveOutput,
+  SYSTEM_OUTPUT_ID,
+} from "../shared/output-device";
 import { PRESETS, cloneProfile, isPresetId } from "../shared/presets";
 import { scrapePageTrack, trackFromTab } from "../shared/scrape-page-track";
 import {
   loadAudioStatus,
   loadAutoDecision,
+  loadBrowserSinks,
+  loadDeviceInventory,
   loadEqState,
+  loadOutputDeviceId,
   loadTheme,
   loadTrack,
   saveEqState,
+  saveOutputDeviceId,
   saveTheme,
   writeSessionLock,
 } from "../shared/storage";
-import type { AudioStatus, AutoDecision, EqBand, EqProfile, FilterType, NormalizedTrack, ThemeMode } from "../shared/types";
+import type {
+  AudioStatus,
+  AutoDecision,
+  BrowserSink,
+  DeviceInventory,
+  EqBand,
+  EqProfile,
+  FilterType,
+  NormalizedTrack,
+  OutputDevice,
+  ThemeMode,
+} from "../shared/types";
 import { BrandMark } from "./BrandMark";
 import { EqGraph } from "./EqGraph";
 
@@ -127,6 +149,9 @@ export function App() {
   const [audioStatus, setAudioStatus] = useState<AudioStatus | null>(null);
   const [activeTabId, setActiveTabId] = useState<number | null>(null);
   const [theme, setTheme] = useState<ThemeMode>("dark");
+  const [outputId, setOutputId] = useState(SYSTEM_OUTPUT_ID);
+  const [inventory, setInventory] = useState<DeviceInventory | null>(null);
+  const [sinks, setSinks] = useState<BrowserSink[]>([]);
 
   const selected = useMemo(
     () => profile.bands.find((band) => band.id === selectedId) ?? profile.bands[0],
@@ -158,6 +183,14 @@ export function App() {
       setTheme(next);
       document.documentElement.dataset.theme = next;
     });
+    void loadOutputDeviceId().then(setOutputId);
+    void loadDeviceInventory().then((next) => {
+      if (next) setInventory(next);
+    });
+    void loadBrowserSinks().then(setSinks);
+    void fetchDevices()
+      .then(setInventory)
+      .catch(() => undefined);
 
     const onStorage = (
       changes: { [key: string]: chrome.storage.StorageChange },
@@ -201,6 +234,15 @@ export function App() {
           }
           return next;
         });
+      }
+      if (typeof changes.outputDeviceId?.newValue === "string") {
+        setOutputId(changes.outputDeviceId.newValue);
+      }
+      if (changes.deviceInventory?.newValue) {
+        setInventory(changes.deviceInventory.newValue as DeviceInventory);
+      }
+      if (Array.isArray(changes.browserSinks?.newValue)) {
+        setSinks(changes.browserSinks.newValue as BrowserSink[]);
       }
     };
     chrome.storage.onChanged.addListener(onStorage);
@@ -278,6 +320,24 @@ export function App() {
       activeTabId == null ||
       audioStatus.tabId === activeTabId);
 
+  const selectedOutput = resolveOutput(inventory, outputId);
+  const bluetoothLive = selectedOutput?.bluetooth === true;
+  const sinkMatch = selectedOutput ? matchSink(selectedOutput, sinks) : null;
+  const activeDevices = inventory?.devices.filter((device) => device.active) ?? [];
+  const pairedBluetooth =
+    inventory?.devices.filter((device) => device.bluetooth && !device.active) ?? [];
+
+  function selectOutput(nextId: string) {
+    setOutputId(nextId);
+    void saveOutputDeviceId(nextId);
+  }
+
+  function outputOptionLabel(device: OutputDevice): string {
+    const kind = device.bluetooth ? "Bluetooth" : deviceClassLabel(device.class);
+    const state = device.active ? "" : " · paired";
+    return `${device.name} · ${kind}${state}`;
+  }
+
   const activePreset = PRESETS.find(
     (preset) =>
       preset.id === profile.id &&
@@ -351,6 +411,7 @@ export function App() {
           <div className="status-row">
             <span className={`pill ${connectionClass}`}>{connectionLabel}</span>
             <span className={auto ? "pill good" : "pill"}>{auto ? "Auto" : "Manual"}</span>
+            {bluetoothLive ? <span className="pill good">Bluetooth</span> : null}
           </div>
         </div>
         <h2>{track?.title ?? "Waiting for playback"}</h2>
@@ -372,6 +433,52 @@ export function App() {
             : audioStatus?.error
               ? audioStatus.error
               : "EQ is not in the audio path yet. Play the video. If sliders stop working mid-song, click the video once."}
+        </p>
+      </section>
+
+      <section className="output">
+        <div className="section-label">
+          <span>Output</span>
+          <span>{selectedOutput ? deviceClassLabel(selectedOutput.class) : "System"}</span>
+        </div>
+        <label className="field output-field">
+          <span className="sr-only">Playback device</span>
+          <select
+            value={outputId}
+            onChange={(event) => selectOutput(event.target.value)}
+          >
+            <option value={SYSTEM_OUTPUT_ID}>
+              System default
+              {inventory?.output?.name ? ` · ${inventory.output.name}` : ""}
+            </option>
+            {activeDevices.length ? (
+              <optgroup label="Connected">
+                {activeDevices.map((device) => (
+                  <option key={device.id} value={device.id}>
+                    {outputOptionLabel(device)}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
+            {pairedBluetooth.length ? (
+              <optgroup label="Bluetooth paired">
+                {pairedBluetooth.map((device) => (
+                  <option key={device.id} value={device.id}>
+                    {outputOptionLabel(device)}
+                  </option>
+                ))}
+              </optgroup>
+            ) : null}
+          </select>
+        </label>
+        <p className="status-copy">
+          {selectedOutput
+            ? selectedOutput.active
+              ? sinkMatch
+                ? `EQ follows ${selectedOutput.name}. Chrome can route this tab to it.`
+                : `EQ follows ${selectedOutput.name}. Play to that device in Windows to hear it.`
+              : `${selectedOutput.name} is paired. Connect it in Windows, then play — Auto will retune for Bluetooth.`
+            : "Start the Rust API to list speakers, HDMI, and Bluetooth devices."}
         </p>
       </section>
 
@@ -522,7 +629,8 @@ export function App() {
       </section>
 
       <p className="hint">
-        Auto retunes as the mix changes. A slider or preset locks a manual curve.
+        Auto retunes as the mix and output change. Bluetooth speakers get less sub and
+        cleaner mids; Bluetooth headphones open presence without fake 16 kHz air.
         Rust engine: <code>cargo run -p universal-eq-api</code> on 127.0.0.1:8787.
       </p>
     </div>

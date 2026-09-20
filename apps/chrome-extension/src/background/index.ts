@@ -1,5 +1,12 @@
-import { fetchRecommend } from "../shared/eq-api";
-import { loadAudioStatus, loadEqState, saveAudioStatus, saveTrack } from "../shared/storage";
+import { fetchDevices, fetchRecommend } from "../shared/eq-api";
+import {
+  loadAudioStatus,
+  loadEqState,
+  saveAudioStatus,
+  saveBrowserSinks,
+  saveDeviceInventory,
+  saveTrack,
+} from "../shared/storage";
 import type { AudioStatus, NormalizedTrack, RuntimeMessage } from "../shared/types";
 
 let lastTrack: NormalizedTrack | null = null;
@@ -36,13 +43,17 @@ chrome.runtime.onMessage.addListener(
       return false;
     }
     if (message.type === "RECOMMEND_EQ") {
-      fetchRecommend(message.track, message.spectrum)
+      fetchRecommend(message.track, message.spectrum, message.device)
         .then((result) => sendResponse({ ok: true, result }))
         .catch((error: unknown) => {
           const text = error instanceof Error ? error.message : String(error);
           sendResponse({ ok: false, error: text });
         });
       return true;
+    }
+    if (message.type === "BROWSER_SINKS") {
+      void saveBrowserSinks(message.sinks);
+      return false;
     }
     return false;
   },
@@ -78,4 +89,17 @@ async function persistAudioStatus(
   if (next.attached === 0 && (current.attached ?? 0) > 0) return;
 }
 
+async function refreshDevices(): Promise<void> {
+  try {
+    const inventory = await fetchDevices();
+    await saveDeviceInventory(inventory);
+  } catch {
+    // API may be down; popup still shows last cached list.
+  }
+}
+
 void refreshBadge();
+void refreshDevices();
+setInterval(() => {
+  void refreshDevices();
+}, 2500);

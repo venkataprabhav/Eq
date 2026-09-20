@@ -1,6 +1,6 @@
 import { trackKey, type SpectrumBands } from "../shared/auto-eq";
 import { recommendFromRust } from "../shared/eq-api";
-import { loadEqState, saveAutoApply, saveAutoDecision } from "../shared/storage";
+import { loadEqState, loadOutputHint, saveAutoApply, saveAutoDecision } from "../shared/storage";
 import type { AutoDecision, EqProfile, EqState, NormalizedTrack } from "../shared/types";
 import { applyEqToPage, sampleSpectrum } from "./audio-graph";
 
@@ -95,7 +95,8 @@ async function requestRecommend(
   inFlight = true;
   const started = performance.now();
   try {
-    const result = await recommendFromRust(track, spectrum);
+    const device = await loadOutputHint();
+    const result = await recommendFromRust(track, spectrum, device);
     const current = await readSession();
     if (!current.auto || current.epoch !== startedEpoch) return;
 

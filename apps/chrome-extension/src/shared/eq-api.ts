@@ -1,5 +1,12 @@
 import type { SpectrumBands } from "./auto-eq";
-import { EQ_BAND_COUNT, type EqProfile, type NormalizedTrack, type RuntimeMessage } from "./types";
+import {
+  EQ_BAND_COUNT,
+  type DeviceInventory,
+  type EqProfile,
+  type NormalizedTrack,
+  type OutputDeviceHint,
+  type RuntimeMessage,
+} from "./types";
 
 export const EQ_API_BASE = "http://127.0.0.1:8787";
 export const EQ_API_TIMEOUT_MS = 350;
@@ -22,6 +29,7 @@ export interface RecommendReply {
 export async function fetchRecommend(
   track: NormalizedTrack | null,
   spectrum: SpectrumBands | null,
+  device?: OutputDeviceHint | null,
 ): Promise<RecommendApiResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), EQ_API_TIMEOUT_MS);
@@ -55,6 +63,13 @@ export async function fetchRecommend(
               air: spectrum.air,
             }
           : null,
+        device: device
+          ? {
+              id: device.id,
+              name: device.name,
+              class: device.class,
+            }
+          : null,
       }),
     });
 
@@ -72,10 +87,32 @@ export async function fetchRecommend(
   }
 }
 
+export async function fetchDevices(): Promise<DeviceInventory> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 900);
+  try {
+    const response = await fetch(`${EQ_API_BASE}/v1/devices`, {
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`EQ API HTTP ${response.status}`);
+    }
+    const data = (await response.json()) as DeviceInventory;
+    return {
+      devices: Array.isArray(data.devices) ? data.devices : [],
+      default_id: data.default_id ?? null,
+      output: data.output ?? null,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Content scripts go through the worker so YouTube → localhost is not the slow path. */
 export async function recommendFromRust(
   track: NormalizedTrack | null,
   spectrum: SpectrumBands | null,
+  device?: OutputDeviceHint | null,
 ): Promise<RecommendApiResponse> {
   try {
     const reply = (await Promise.race([
@@ -83,6 +120,7 @@ export async function recommendFromRust(
         type: "RECOMMEND_EQ",
         track,
         spectrum,
+        device: device ?? null,
       } satisfies RuntimeMessage) as Promise<RecommendReply | undefined>,
       new Promise<never>((_, reject) => {
         window.setTimeout(() => reject(new Error("EQ API timeout")), EQ_API_TIMEOUT_MS + 80);
@@ -96,5 +134,5 @@ export async function recommendFromRust(
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes("EQ API")) throw error;
   }
-  return fetchRecommend(track, spectrum);
+  return fetchRecommend(track, spectrum, device);
 }

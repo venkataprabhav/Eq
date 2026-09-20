@@ -46,6 +46,45 @@ export interface AutoDecision {
   trackKey: string;
 }
 
+export type DeviceClass =
+  | "unknown"
+  | "speakers"
+  | "headphones"
+  | "headset"
+  | "hdmi"
+  | "bluetooth_headphones"
+  | "bluetooth_speaker"
+  | "bluetooth_headset";
+
+export interface OutputDeviceHint {
+  id: string;
+  name: string;
+  class: DeviceClass;
+}
+
+export interface OutputDevice {
+  id: string;
+  name: string;
+  class: DeviceClass;
+  transport: string;
+  enumerator: string;
+  form_factor: number;
+  active: boolean;
+  is_default: boolean;
+  bluetooth: boolean;
+}
+
+export interface DeviceInventory {
+  devices: OutputDevice[];
+  default_id: string | null;
+  output: OutputDevice | null;
+}
+
+export interface BrowserSink {
+  sinkId: string;
+  label: string;
+}
+
 export interface AudioStatus {
   attached: number;
   mediaFound: number;
@@ -74,7 +113,13 @@ export type RuntimeMessage =
   | { type: "TRACK_RESPONSE"; track: NormalizedTrack | null }
   | { type: "AUDIO_STATUS"; status: AudioStatus }
   | { type: "APPLY_EQ" }
-  | { type: "RECOMMEND_EQ"; track: NormalizedTrack | null; spectrum: SpectrumSnapshot | null };
+  | {
+      type: "RECOMMEND_EQ";
+      track: NormalizedTrack | null;
+      spectrum: SpectrumSnapshot | null;
+      device?: OutputDeviceHint | null;
+    }
+  | { type: "BROWSER_SINKS"; sinks: BrowserSink[] };
 
 export const STORAGE_KEYS = {
   enabled: "enabled",
@@ -85,4 +130,7 @@ export const STORAGE_KEYS = {
   autoDecision: "autoDecision",
   epoch: "epoch",
   theme: "theme",
+  outputDeviceId: "outputDeviceId",
+  browserSinks: "browserSinks",
+  deviceInventory: "deviceInventory",
 } as const;

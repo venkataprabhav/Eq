@@ -1,7 +1,20 @@
 import { extensionAlive } from "../shared/runtime";
-import { loadEqState, saveTrack } from "../shared/storage";
+import {
+  loadBrowserSinks,
+  loadDeviceInventory,
+  loadEqState,
+  loadOutputDeviceId,
+  saveTrack,
+} from "../shared/storage";
+import { matchSink, resolveOutput, SYSTEM_OUTPUT_ID } from "../shared/output-device";
 import type { EqState, RuntimeMessage } from "../shared/types";
-import { applyEqToPage, resumeGraphs, watchMedia } from "./audio-graph";
+import {
+  applyEqToPage,
+  listBrowserSinks,
+  resumeGraphs,
+  setOutputSink,
+  watchMedia,
+} from "./audio-graph";
 import { noteAutoSession, runAutoEq } from "./auto-eq-runner";
 import { readTrack, tracksEqual } from "./metadata";
 
@@ -86,6 +99,10 @@ chrome.storage.onChanged.addListener((changes, area) => {
     resumeGraphs();
     void syncEq(true).then(() => runAutoEq(readTrack(), { force: true }));
   }
+  if (changes.outputDeviceId || changes.deviceInventory || changes.browserSinks) {
+    void routeOutput();
+    void runAutoEq(readTrack(), { force: true });
+  }
 });
 
 chrome.runtime.onMessage.addListener((message: RuntimeMessage, _sender, sendResponse) => {
@@ -104,6 +121,8 @@ chrome.runtime.onMessage.addListener((message: RuntimeMessage, _sender, sendResp
 
 void syncEq(true);
 publishTrack();
+void routeOutput();
+void publishSinks();
 stopWatch = watchMedia(() => {
   void syncEq();
   publishTrack();
@@ -114,6 +133,41 @@ pollId = window.setInterval(() => {
   publishTrack();
   void runAutoEq(readTrack());
 }, 180);
+
+async function publishSinks(): Promise<void> {
+  if (!alive()) return;
+  try {
+    const sinks = await listBrowserSinks();
+    await chrome.runtime.sendMessage({
+      type: "BROWSER_SINKS",
+      sinks,
+    } satisfies RuntimeMessage);
+  } catch {
+    alive();
+  }
+}
+
+async function routeOutput(): Promise<void> {
+  if (!alive()) return;
+  const [selectedId, inventory, sinks] = await Promise.all([
+    loadOutputDeviceId(),
+    loadDeviceInventory(),
+    listBrowserSinks().catch(async () => loadBrowserSinks()),
+  ]);
+  if (selectedId === SYSTEM_OUTPUT_ID) {
+    await setOutputSink("");
+    return;
+  }
+  const device = resolveOutput(inventory, selectedId);
+  const match = device ? matchSink(device, sinks) : null;
+  await setOutputSink(match?.sinkId ?? "");
+}
+
+navigator.mediaDevices?.addEventListener("devicechange", () => {
+  void publishSinks();
+  void routeOutput();
+  void runAutoEq(readTrack(), { force: true });
+});
 
 const mediaEvents = [
   "play",

@@ -14,6 +14,38 @@ interface AttachedGraph {
 
 const attached = new WeakMap<HTMLMediaElement, AttachedGraph>();
 const liveGraphs = new Set<AttachedGraph>();
+let desiredSinkId = "";
+
+type AudioContextWithSink = AudioContext & {
+  setSinkId?: (sinkId: string) => Promise<void>;
+  sinkId?: string;
+};
+
+async function applySinkToContext(context: AudioContext): Promise<void> {
+  const ctx = context as AudioContextWithSink;
+  if (typeof ctx.setSinkId !== "function") return;
+  const next = desiredSinkId;
+  if ((ctx.sinkId ?? "") === next) return;
+  try {
+    await ctx.setSinkId(next);
+  } catch {
+    // Sink may be gone after a Bluetooth disconnect.
+  }
+}
+
+export async function setOutputSink(sinkId: string): Promise<void> {
+  desiredSinkId = sinkId;
+  await Promise.all([...liveGraphs].map((graph) => applySinkToContext(graph.context)));
+}
+
+export function listBrowserSinks(): Promise<{ sinkId: string; label: string }[]> {
+  if (!navigator.mediaDevices?.enumerateDevices) return Promise.resolve([]);
+  return navigator.mediaDevices.enumerateDevices().then((devices) =>
+    devices
+      .filter((device) => device.kind === "audiooutput")
+      .map((device) => ({ sinkId: device.deviceId, label: device.label || "Audio output" })),
+  );
+}
 
 function keepContextAlive(context: AudioContext): void {
   const osc = context.createOscillator();
@@ -68,6 +100,7 @@ function createGraph(element: HTMLMediaElement): AttachedGraph | null {
     node.connect(limiter);
     limiter.connect(context.destination);
     keepContextAlive(context);
+    void applySinkToContext(context);
 
     (element as HTMLMediaElement & { __ueqAttached?: boolean }).__ueqAttached =
       true;

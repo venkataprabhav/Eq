@@ -1,6 +1,17 @@
 import { DEFAULT_PROFILE, cloneProfile, normalizeProfileBands } from "./presets";
+import { resolveOutput, toDeviceHint } from "./output-device";
 import { extensionAlive, isContextInvalidated } from "./runtime";
-import type { AudioStatus, AutoDecision, EqProfile, EqState, NormalizedTrack, ThemeMode } from "./types";
+import type {
+  AudioStatus,
+  AutoDecision,
+  BrowserSink,
+  DeviceInventory,
+  EqProfile,
+  EqState,
+  NormalizedTrack,
+  OutputDeviceHint,
+  ThemeMode,
+} from "./types";
 import { STORAGE_KEYS } from "./types";
 
 function isBand(value: unknown): value is EqProfile["bands"][number] {
@@ -204,4 +215,77 @@ export async function loadTrack(): Promise<NormalizedTrack | null> {
     if (isContextInvalidated(error)) return null;
     throw error;
   }
+}
+
+export async function loadOutputDeviceId(): Promise<string> {
+  if (!extensionAlive()) return "system";
+  try {
+    const stored = await chrome.storage.local.get(STORAGE_KEYS.outputDeviceId);
+    return typeof stored[STORAGE_KEYS.outputDeviceId] === "string"
+      ? stored[STORAGE_KEYS.outputDeviceId]
+      : "system";
+  } catch (error) {
+    if (isContextInvalidated(error)) return "system";
+    throw error;
+  }
+}
+
+export async function saveOutputDeviceId(id: string): Promise<void> {
+  if (!extensionAlive()) return;
+  try {
+    await chrome.storage.local.set({ [STORAGE_KEYS.outputDeviceId]: id });
+  } catch (error) {
+    if (!isContextInvalidated(error)) throw error;
+  }
+}
+
+export async function saveBrowserSinks(sinks: BrowserSink[]): Promise<void> {
+  if (!extensionAlive()) return;
+  try {
+    await chrome.storage.local.set({ [STORAGE_KEYS.browserSinks]: sinks });
+  } catch (error) {
+    if (!isContextInvalidated(error)) throw error;
+  }
+}
+
+export async function loadBrowserSinks(): Promise<BrowserSink[]> {
+  if (!extensionAlive()) return [];
+  try {
+    const stored = await chrome.storage.local.get(STORAGE_KEYS.browserSinks);
+    const value = stored[STORAGE_KEYS.browserSinks];
+    return Array.isArray(value) ? (value as BrowserSink[]) : [];
+  } catch (error) {
+    if (isContextInvalidated(error)) return [];
+    throw error;
+  }
+}
+
+export async function saveDeviceInventory(inventory: DeviceInventory | null): Promise<void> {
+  if (!extensionAlive()) return;
+  try {
+    await chrome.storage.local.set({ [STORAGE_KEYS.deviceInventory]: inventory });
+  } catch (error) {
+    if (!isContextInvalidated(error)) throw error;
+  }
+}
+
+export async function loadDeviceInventory(): Promise<DeviceInventory | null> {
+  if (!extensionAlive()) return null;
+  try {
+    const stored = await chrome.storage.local.get(STORAGE_KEYS.deviceInventory);
+    const value = stored[STORAGE_KEYS.deviceInventory];
+    if (!value || typeof value !== "object") return null;
+    const inventory = value as DeviceInventory;
+    return Array.isArray(inventory.devices) ? inventory : null;
+  } catch (error) {
+    if (isContextInvalidated(error)) return null;
+    throw error;
+  }
+}
+
+export async function loadOutputHint(): Promise<OutputDeviceHint | null> {
+  const selectedId = await loadOutputDeviceId();
+  if (selectedId === "system") return null;
+  const inventory = await loadDeviceInventory();
+  return toDeviceHint(resolveOutput(inventory, selectedId));
 }
