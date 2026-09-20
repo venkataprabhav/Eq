@@ -1,9 +1,11 @@
 use std::net::SocketAddr;
 use std::time::Instant;
 
-use axum::http::{header, Method, StatusCode};
+use axum::http::{header, HeaderMap, Method, StatusCode};
+use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
+use device_manager::{list_output_devices_cached, DeviceInventory};
 use dsp::recommend;
 use eq_core::{RecommendRequest, RecommendResponse};
 use tower_http::cors::{Any, CorsLayer};
@@ -29,6 +31,7 @@ async fn main() {
     let app = Router::new()
         .route("/", get(index))
         .route("/health", get(health))
+        .route("/v1/devices", get(devices_handler))
         .route("/v1/eq/recommend", post(recommend_handler))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
@@ -38,51 +41,92 @@ async fn main() {
         .await
         .expect("failed to bind API port");
     tracing::info!("Universal EQ API listening on http://{addr}");
-    tracing::info!("GET /  GET /health  POST /v1/eq/recommend");
+    tracing::info!("GET /  GET /health  GET /v1/devices  POST /v1/eq/recommend");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("API server failed");
 }
 
-async fn index() -> axum::response::Html<&'static str> {
-    axum::response::Html(
-        r#"<!doctype html>
+const STATUS_PAGE: &str = r#"<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>Universal EQ API</title>
+  <title>Universally Equalizing</title>
   <style>
-    body { font-family: system-ui, sans-serif; max-width: 36rem; margin: 3rem auto; padding: 0 1rem; color: #222; }
-    code { background: #f3f3f3; padding: 0.1rem 0.35rem; }
-    .ok { color: #0a7a32; }
+    :root { color-scheme: dark; }
+    html, body { height: 100%; margin: 0; }
+    body {
+      min-height: 100%;
+      display: grid;
+      place-items: center;
+      background: #0b0c0f;
+      color: #f3efe6;
+      font-family: "Segoe UI Variable", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+    }
+    .mark { text-align: center; padding: 2rem; }
+    h1 {
+      margin: 0;
+      font-size: clamp(2.1rem, 6vw, 3.6rem);
+      font-weight: 600;
+      letter-spacing: -0.04em;
+      color: #c4a574;
+    }
+    p {
+      margin: 0.85rem 0 0;
+      color: #8a857c;
+      font-size: 0.95rem;
+    }
   </style>
 </head>
 <body>
-  <p class="ok">Backend is running.</p>
-  <h1>Universal EQ API</h1>
-  <p>This server is <strong>HTTP only</strong>. Use <code>http://127.0.0.1:8787</code>, not <code>https://</code>.</p>
-  <p>If Chrome shows <code>ERR_SSL_PROTOCOL_ERROR</code>, it forced HTTPS. Turn off <em>Always use secure connections</em> or keep the <code>http://</code> prefix.</p>
-  <ul>
-    <li><a href="/health">GET /health</a></li>
-    <li>POST /v1/eq/recommend — used by the Chrome extension Auto button</li>
-  </ul>
+  <div class="mark">
+    <h1>Universally Equalizing</h1>
+    <p>Universal EQ is running</p>
+  </div>
 </body>
-</html>"#,
-    )
+</html>"#;
+
+fn wants_html(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.contains("text/html"))
 }
 
-async fn health() -> Json<serde_json::Value> {
+async fn index() -> axum::response::Html<&'static str> {
+    axum::response::Html(STATUS_PAGE)
+}
+
+async fn health(headers: HeaderMap) -> impl IntoResponse {
+    if wants_html(&headers) {
+        return axum::response::Html(STATUS_PAGE).into_response();
+    }
     Json(serde_json::json!({
         "ok": true,
         "service": "universal-eq-api",
         "engine": "universal-eq-rust/0.1",
+        "message": "Universally Equalizing",
     }))
+    .into_response()
+}
+
+async fn devices_handler() -> Json<DeviceInventory> {
+    let inventory = tokio::task::spawn_blocking(list_output_devices_cached)
+        .await
+        .unwrap_or_else(|_| DeviceInventory::empty());
+    Json(inventory)
 }
 
 async fn recommend_handler(
-    Json(request): Json<RecommendRequest>,
+    Json(mut request): Json<RecommendRequest>,
 ) -> Result<Json<RecommendResponse>, (StatusCode, String)> {
+    if request.device.is_none() {
+        let inventory = tokio::task::spawn_blocking(list_output_devices_cached)
+            .await
+            .unwrap_or_else(|_| DeviceInventory::empty());
+        request.device = inventory.hint();
+    }
     let started = Instant::now();
     let mut response = recommend(&request);
     response.latency_ms = started.elapsed().as_millis() as u64;
@@ -96,6 +140,11 @@ async fn recommend_handler(
         tracing::info!(
             latency_ms = response.latency_ms,
             track = %response.track_key,
+            device = %request
+                .device
+                .as_ref()
+                .map(|device| device.name.as_str())
+                .unwrap_or("unknown"),
             "recommend ok"
         );
     }

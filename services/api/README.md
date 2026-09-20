@@ -6,7 +6,9 @@ The Chrome extension Auto mode calls:
 
 `POST http://127.0.0.1:8787/v1/eq/recommend`
 
-within a **500ms** timeout.
+within a **500ms** timeout. Playback devices (including paired Bluetooth) are listed at:
+
+`GET http://127.0.0.1:8787/v1/devices`
 
 ## Run
 
